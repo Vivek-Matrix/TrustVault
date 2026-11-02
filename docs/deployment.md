@@ -1,91 +1,113 @@
-# Prototype hosting plan
+# AWS deployment status
 
-## Selected services
+## Hosting decision
 
-- **Render Web Service (Docker):** ASP.NET Core API serves the Angular static
-  build from the same origin for the initial prototype.
-- **Render PostgreSQL:** relational database.
-- **Cloudflare R2:** private object storage for uploaded document binaries.
-- **GitHub Actions:** CI; Render can auto-deploy from the connected branch.
+AWS is the selected cloud provider for a future internet deployment. The AWS
+experience rules are present in `.github/copilot-instructions.md`, but the AWS
+CLI profile is for local development only. TrustVault has not been deployed to
+AWS and no AWS application, database, or storage resources have been created.
 
-The root [Dockerfile](../Dockerfile) builds the Angular frontend and .NET API
-into one image. Render's assigned `PORT` is honored by the API. Configure the
-service health check to `GET /api/system/health`; use
-`GET /api/system/ready` to confirm that the database is reachable.
-The app accepts Render's PostgreSQL `postgres://`/`postgresql://` URL through
-`DATABASE_URL` and converts it to an encrypted Npgsql connection. It also
-accepts a standard Npgsql connection string in `ConnectionStrings__TrustVault`.
+The previous Render setup instructions are superseded. Do not create Render
+services by following earlier copies of this plan.
 
-This plan is sized for a small prototype, but document confidentiality still
-requires production-grade authorization. Hosting providers do not enforce the
-application's per-document access rules.
+## Current state
 
-## Manual account preparation
+- The root Dockerfile packages the Angular frontend and ASP.NET Core API into a
+  single container image.
+- GitHub Actions builds and tests the project and builds the container image.
+  It does not publish the image to a registry or deploy it to AWS.
+- The backend uses PostgreSQL. AWS database selection and network design have
+  not been completed.
+- The requested selected Region is `ap-southeast-2`. The owner confirmed the
+  `trustvault-dev` profile; its AWS CLI sign-in succeeded and its configured
+  Region is `ap-southeast-2`.
+- The AWS CLI v2 and `uv` are available locally, and the Agent Toolkit skill
+  catalog returned 119 skills.
+- The workspace `.vscode/mcp.json` already contains an AWS MCP remote HTTP
+  endpoint. The local Agent Toolkit setup wizard was not run because its
+  generated profile-bound server could conflict with that existing connection.
+  The existing config was left untouched.
+- The owner confirmed the selected Region `ap-southeast-2` and $100.00 in
+  remaining credits. Credits may expire or have service restrictions and do
+  not impose a recurring monthly spend limit. Confirm the project spend limit,
+  service eligibility, and full design cost in AWS Settings before creating
+  AWS application resources.
+- The local Compose PostgreSQL service is healthy, and the EF migrator
+  successfully applied migrations to its existing database. The named database
+  volume was preserved. The migrator also succeeded against a separate empty
+  PostgreSQL database, which was removed after verification.
+- The latest pushed CI run for commit `5db247e` succeeded. Later local edits are
+  uncommitted and have not been validated by GitHub Actions.
 
-1. Create/sign in to GitHub and confirm the repository is private or public
-   according to the review requirement. Never commit credentials or environment
-   files.
-2. Create/sign in to Render. Enable account MFA and review current service,
-   database, bandwidth, and storage pricing.
-3. Set a monthly spending target and provider budget/usage alerts where available.
-   Alerts are not guaranteed spending caps. Avoid provisioning paid services
-   until implementation and expected costs are reviewed.
-4. Create/sign in to Cloudflare and enable account MFA.
-5. Do not create an R2 bucket or API token until the backend storage integration
-   is implemented. At that point, create a dedicated private bucket and a
-   narrowly scoped token for that bucket only. Never share the token in chat or
-   add it to Git.
-6. Do not manually create production database tables or paste cloud credentials
-   into the repository. The image includes a one-shot migrator at
-   `dotnet migrator/TrustVault.Migrator.dll`; run it as a Render pre-deploy
-   command before the API release starts. This command requires a service plan
-   that supports pre-deploy commands.
+## AWS Agent Toolkit setup
 
-No provider credentials are needed to continue coding locally or in GitHub CI.
-When deployment is ready, sign in directly to provider dashboards and add the
-required secrets there.
+The owner confirmed the `trustvault-dev` profile. AWS CLI v2 and `uv` are
+installed, browser sign-in succeeded, and the STS identity check passed.
+Credentials last 12 hours and can be renewed for up to 90 days without repeating
+browser authentication. Never request or put AWS access keys or secret keys in
+chat or source control.
 
-## Render setup after the code is ready
+The verified profile commands were:
 
-1. In Render, create a managed PostgreSQL database and a Docker Web Service
-   connected to the TrustVault GitHub repository and the branch you intend to
-   deploy.
-2. Set the Web Service's Dockerfile path to `Dockerfile` at the repository root.
-   Do not set a separate frontend build or start command; the image builds the
-   Angular app and starts the API.
-3. Configure the database's **internal** URL as the Web Service's `DATABASE_URL`
-   environment variable. Keep the database and Web Service in the same Render
-   region. Do not use the external database URL for the service-to-database
-   connection.
-4. Add these environment variables to the Web Service. Enter secret values only
-   in Render's dashboard; do not paste them into chat or commit them:
+```powershell
+aws configure set region ap-southeast-2 --profile trustvault-dev
+aws login --region ap-southeast-2 --profile trustvault-dev
+aws sts get-caller-identity --profile trustvault-dev
+aws agent-toolkit list-available-skills --region us-east-1 --profile trustvault-dev
+```
 
-   - `ASPNETCORE_ENVIRONMENT` = `Production`
-   - `DATABASE_URL` = the PostgreSQL internal URL
-   - `Jwt__SigningKey` = a cryptographically random value with at least 32 UTF-8
-     bytes
-   - `Jwt__Issuer` = `TrustVault`
-   - `Jwt__Audience` = `TrustVault`
+The final command returned 119 skills. The setup guide's wizard command is:
 
-5. Set the health check path to `/api/system/health`. Add the pre-deploy command
-   `dotnet migrator/TrustVault.Migrator.dll` so EF migrations run before each
-   release. Confirm the selected Web Service plan supports pre-deploy commands
-   and check current pricing before creating paid resources.
-6. Deploy, then verify the service health check is green and open
-   `/api/system/ready`. A `200` response confirms database connectivity; a
-   `503` means to inspect Render's service logs and database URL configuration.
+```powershell
+aws configure agent-toolkit --yes --region us-east-1 --profile trustvault-dev
+```
 
-The initial deployment serves frontend and API on one origin, so
-`Frontend__Origin` and R2 credentials are not needed. Do not provision R2 until
-the application implements private document storage. Never publish secret
-values, signing keys, database URLs, or R2 credentials in GitHub Actions logs,
-build arguments, or the Angular bundle.
+It was not run because the existing workspace `aws-mcp` entry is a remote HTTP
+server, not the generated local server configuration that accepts
+`AWS_MCP_PROXY_PROFILES`. Do not add that variable to the remote HTTP entry or
+overwrite it. If a profile-bound local MCP server is needed later, add it as a
+separate server after reviewing the generated configuration. See the
+[official Agent Toolkit setup guide](https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/refs/heads/main/setup-instructions/setup.md)
+for the remaining configuration steps.
 
-## Deployment gate
+The toolkit management command uses `us-east-1` per the setup guide; this does
+not change the application's selected Region. Regional application resources
+must remain in `ap-southeast-2`. If the toolkit is configured later, preserve
+the current remote HTTP entry and set `AWS_MCP_PROXY_PROFILES=trustvault-dev`
+only on the separate generated local server.
 
-Do not expose document upload/download publicly until authorization and
-revocation integration tests pass against server endpoints and a private storage
-bucket. Before a judge-facing deployment, also require HTTPS, migrations through
-a controlled release step, backups/restore verification, bounded upload limits,
-rate limits, security headers, audit-chain verification, and documented
-incident/secret-rotation procedures. These are not implemented in Sprint 0.
+## Before deployment work
+
+1. In AWS Settings, confirm the project's selected Region is `ap-southeast-2`
+   and review Billing, the remaining credit balance, and the project spend
+   limit. New AWS experience projects must use their assigned Region for
+   Regional resources.
+2. Verify service availability and eligibility for this project before choosing
+   services. An active AWS subscription or an installed toolkit does not imply
+   that a service is free or enabled.
+3. Design an AWS deployment that supports the existing .NET Docker container and
+   PostgreSQL. Include container hosting, image storage, database, networking,
+   secrets, logs, health checks, and a controlled migration step. Review the
+   complete expected cost before provisioning.
+4. Do not put database credentials, signing keys, or AWS credentials in Git,
+   Docker build arguments, frontend files, or chat. Use an AWS secret-management
+   service if a deployment is approved.
+5. Do not deploy confidential documents. Login/token issuance, document
+   authorization and revocation, private object storage, audit-chain writing,
+   and the production database-role split are unfinished.
+
+## Deployment acceptance checks
+
+Once an AWS design is approved and implemented, verify all of the following
+before marking internet deployment complete:
+
+- CI builds, tests, and publishes the exact commit intended for deployment.
+- The deployed service runs in `ap-southeast-2` and serves the Angular app and
+  API over HTTPS.
+- Database credentials are stored outside the image and source repository; the
+  controlled EF migrator succeeds before the API release starts.
+- The configured health check returns success, and service logs show no startup
+  or database connection errors.
+- Database backup/restore and service cleanup procedures are understood.
+- No confidential files are uploaded until the document security work is
+  complete and tested.

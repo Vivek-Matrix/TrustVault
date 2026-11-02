@@ -4,11 +4,12 @@
 
 The Angular 21 application is an untrusted client. ASP.NET Core 10 validates bearer
 tokens and is the only future boundary for document authorization. PostgreSQL holds identities, document metadata, per-user grants, versions, and
-audit events. The selected prototype hosting direction is a Render Docker Web
-Service serving both API and Angular on one origin, plus managed PostgreSQL.
-Cloudflare R2 is planned for binary files but is not connected yet; the R2 bucket
-must remain private and use server-generated object keys before upload/download
-stories ship.
+audit events. AWS is the selected cloud provider for a future deployment.
+Specific AWS hosting and database services have not been selected. The existing
+Docker image serves the API and Angular app on one origin, but CI only builds
+the image; it does not publish or deploy it. No AWS infrastructure is configured.
+Do not upload real confidential files until server-side authorization,
+revocation, secure storage, and audit behavior are implemented and tested.
 
 ## Authorization model
 
@@ -19,12 +20,14 @@ delete. An administrator does not inherit document access. A revoked grant is
 retained for history and takes effect when the server evaluates the active grant
 on each request.
 
-The API's fallback policy requires authentication; `/api/system/health`,
-`/api/system/ready`, and the
-development OpenAPI document are explicit anonymous exceptions. JWT validation
-requires a secret key supplied through configuration and rejects keys under 32
-UTF-8 bytes. JWT issuance, account suspension enforcement, document ACL handlers,
-and refresh-token rotation are not part of Sprint 0.
+The API's fallback policy requires authentication; health, registration/login,
+and the development OpenAPI document are explicit anonymous exceptions. The
+database readiness endpoint remains protected by the fallback policy. JWT
+validation requires a secret key supplied through configuration and rejects
+keys under 32 UTF-8 bytes. Registration assigns the Viewer role, and issued
+access tokens default to 15 minutes. Account suspension administration and
+revocation of already-issued tokens, document ACL handlers, and refresh-token
+rotation remain future work.
 
 ## Data model
 
@@ -58,9 +61,8 @@ the server in later API stories.
 
 Secrets are supplied via .NET environment variables or a secret manager, never
 the Angular bundle. `Jwt:SigningKey` and `ConnectionStrings:TrustVault` are
-required by the API. `Frontend:Origin` configures the local CORS origin. Render
-and Cloudflare accounts/resources, production deployment, HTTPS, managed
-PostgreSQL, R2, runtime DB-role separation, and operational monitoring remain
-unconfigured. Render services must receive secrets through their environment
-settings; Cloudflare API tokens belong only in the secret store of the future
-storage integration and must be narrowly scoped.
+required by the API. `Frontend:Origin` configures the local CORS origin. AWS
+production resources, HTTPS, managed PostgreSQL, private object storage, runtime
+DB-role separation, and operational monitoring remain unconfigured. AWS
+credentials and application secrets must not be committed to source control or
+included in the frontend bundle.

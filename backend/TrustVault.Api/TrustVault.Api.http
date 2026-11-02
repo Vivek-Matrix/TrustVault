@@ -1,5 +1,27 @@
 @TrustVault.Api_HostAddress = http://localhost:5106
 
+### Register a Viewer account
+POST {{TrustVault.Api_HostAddress}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "new-user@example.test",
+  "password": "ReplaceWithStrongPassword123!"
+}
+
+###
+
+### Sign in
+POST {{TrustVault.Api_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "new-user@example.test",
+  "password": "ReplaceWithStrongPassword123!"
+}
+
+###
+
 GET {{TrustVault.Api_HostAddress}}/api/system/health
 Accept: application/json
 

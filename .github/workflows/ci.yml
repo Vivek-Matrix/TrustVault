@@ -10,6 +10,23 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: trustvault
+          POSTGRES_USER: trustvault_app
+          POSTGRES_PASSWORD: local_only
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U trustvault_app -d trustvault"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ConnectionStrings__TrustVault: Host=localhost;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only
+      Jwt__SigningKey: ci-only-signing-key-not-used-for-deployment-32-bytes
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -19,6 +36,8 @@ jobs:
       - run: dotnet tool restore
       - run: dotnet format TrustVault.sln --verify-no-changes --no-restore
       - run: dotnet build TrustVault.sln --no-restore --configuration Release
+      - name: Apply database migrations
+        run: dotnet run --project backend/TrustVault.Migrator --configuration Release
       - run: dotnet test TrustVault.sln --no-build --configuration Release
       - name: Check EF model and migrations
         run: dotnet tool run dotnet-ef migrations has-pending-model-changes --project backend/TrustVault.Infrastructure --startup-project backend/TrustVault.Api

@@ -1,0 +1,167 @@
+:host {
+  display: block;
+}
+
+.brand {
+  margin: 0 auto 2rem;
+  max-width: 32rem;
+  text-align: center;
+}
+
+.eyebrow {
+  color: #387c70;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.brand h1 {
+  margin: 0.4rem 0;
+  font-size: clamp(2.4rem, 8vw, 3.5rem);
+}
+
+.intro,
+.security-note,
+.session-note,
+footer {
+  color: #657187;
+  line-height: 1.6;
+}
+
+.auth-card {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 28rem;
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  border: 1px solid #e1e7ef;
+  border-radius: 1.2rem;
+  background: #fff;
+}
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  margin-bottom: 1.75rem;
+  padding: 0.3rem;
+  border-radius: 0.75rem;
+  background: #f2f5f8;
+}
+
+.mode-switch button {
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #526178;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.7rem 0.8rem;
+}
+
+.mode-switch button.selected {
+  background: #fff;
+  color: #183b67;
+  box-shadow: 0 1px 3px #183b6714;
+}
+
+h2 {
+  margin: 0;
+  color: #183b67;
+  font-size: 1.5rem;
+}
+
+.intro {
+  margin: 0.5rem 0 1.5rem;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+}
+
+label {
+  margin: 1rem 0 0.45rem;
+  color: #28374d;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.9rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.55rem;
+  color: #172033;
+  font: inherit;
+}
+
+input:focus {
+  border-color: #337f76;
+  outline: 3px solid #337f7626;
+}
+
+.field-hint,
+.field-error {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.field-error,
+.form-message {
+  color: #a52b2b;
+}
+
+.primary-button {
+  min-height: 3rem;
+  margin-top: 1.5rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: #183b67;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.form-message {
+  margin: 0 0 0.5rem;
+  padding: 0.8rem;
+  border: 1px solid #f1caca;
+  border-radius: 0.5rem;
+  background: #fff7f7;
+  font-size: 0.9rem;
+}
+
+.security-note {
+  margin: 1.2rem 0 0;
+}
+
+.session-note {
+  margin-top: 1.5rem;
+  font-size: 0.85rem;
+}
+
+.secondary-button {
+  width: 100%;
+  border: 1px solid #cbd4df;
+  border-radius: 0.55rem;
+  background: #f5f7fb;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.7rem 0.8rem;
+}
+
+footer {
+  margin: 2rem auto;
+  font-size: 0.8rem;
+  text-align: center;
+}

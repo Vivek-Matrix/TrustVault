@@ -2,9 +2,13 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.Threading.RateLimiting;
 using TrustVault.Domain.Security;
+using TrustVault.Api.Services;
 using TrustVault.Infrastructure.Persistence;
 using TrustVault.Infrastructure.Persistence.Entities;
 
@@ -23,11 +27,44 @@ if (string.IsNullOrWhiteSpace(signingKey) || Encoding.UTF8.GetByteCount(signingK
 
 var issuer = builder.Configuration["Jwt:Issuer"] ?? "TrustVault";
 var audience = builder.Configuration["Jwt:Audience"] ?? "TrustVault";
+var accessTokenLifetimeMinutes = builder.Configuration.GetValue(
+    "Jwt:AccessTokenLifetimeMinutes",
+    15);
+if (accessTokenLifetimeMinutes is < 5 or > 30)
+{
+    throw new InvalidOperationException(
+        "Jwt:AccessTokenLifetimeMinutes must be between 5 and 30.");
+}
 
 builder.Services.AddProblemDetails();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("authentication", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"{context.Connection.RemoteIpAddress?.ToString() ?? "unknown"}:{context.Request.Path}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.ContentType = "application/problem+json";
+        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = StatusCodes.Status429TooManyRequests,
+            Title = "Too many authentication requests.",
+            Detail = "Wait before trying again."
+        }, cancellationToken);
+    };
+});
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
 builder.Services
@@ -80,7 +117,9 @@ var app = builder.Build();
 app.UseExceptionHandler();
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseRouting();
 app.UseCors();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
