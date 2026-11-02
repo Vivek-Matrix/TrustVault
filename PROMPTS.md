@@ -1,8 +1,8 @@
 # AI prompt log
 
 This log records actual work as it happens. No future prompts or commits are
-invented; the initial workspace had no Git history, so commit links will be
-filled when each change is committed.
+invented. The repository has no remote URL yet, so the first commit is identified
+by its local hash.
 
 ## 2026-11-02 — Sprint 0 foundation
 
@@ -22,7 +22,8 @@ filled when each change is committed.
   valid/invalid-token handling. Added EF/application guards and a database
   trigger for audit updates/deletes. The audit model is not described as
   tamper-proof because hash-chain writing and restricted DB roles are missing.
-- **Commit:** Pending; no Git repository existed at task start.
+- **Commit:** `23bcfcd24106d46159263f7faeaba75cc4f6ad46`
+  (`feat(sprint-0): establish TrustVault foundation`; local commit, no remote URL).
 
 ## Reused context
 
