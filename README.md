@@ -33,7 +33,9 @@ From the repository root in PowerShell:
 docker compose up -d postgres
 $env:ConnectionStrings__TrustVault = "Host=localhost;Port=5432;Database=trustvault;Username=trustvault_app;Password=local_only"
 $keyBytes = New-Object byte[] 32
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($keyBytes)
+$rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+$rng.GetBytes($keyBytes)
+$rng.Dispose()
 $env:Jwt__SigningKey = [Convert]::ToBase64String($keyBytes)
 $env:Jwt__Issuer = "TrustVault"
 $env:Jwt__Audience = "TrustVault"
