@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet restore TrustVault.sln
+      - run: dotnet tool restore
+      - run: dotnet format TrustVault.sln --verify-no-changes --no-restore
+      - run: dotnet build TrustVault.sln --no-restore --configuration Release
+      - run: dotnet test TrustVault.sln --no-build --configuration Release
+      - name: Check EF model and migrations
+        run: dotnet tool run dotnet-ef migrations has-pending-model-changes --project backend/TrustVault.Infrastructure --startup-project backend/TrustVault.Api
+        env:
+          ConnectionStrings__TrustVault: Host=localhost;Database=trustvault;Username=ci;Password=ci-only
+          Jwt__SigningKey: ci-only-signing-key-not-used-for-deployment-32-bytes
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm test -- --watch=false --browsers=ChromeHeadless
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npm audit --omit=dev
+        working-directory: frontend

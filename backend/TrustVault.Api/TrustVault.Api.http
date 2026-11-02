@@ -1,0 +1,12 @@
+@TrustVault.Api_HostAddress = http://localhost:5106
+
+GET {{TrustVault.Api_HostAddress}}/api/system/health
+Accept: application/json
+
+###
+
+GET {{TrustVault.Api_HostAddress}}/api/system/whoami
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###

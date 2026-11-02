@@ -1,0 +1,17 @@
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/.angular/
+coverage/
+TestResults/
+.eslintcache
+.env
+.env.*
+!.env.example
+*.user
+*.suo
