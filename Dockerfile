@@ -13,6 +13,7 @@ COPY backend/TrustVault.Application/TrustVault.Application.csproj backend/TrustV
 COPY backend/TrustVault.Domain/TrustVault.Domain.csproj backend/TrustVault.Domain/
 COPY backend/TrustVault.Infrastructure/TrustVault.Infrastructure.csproj backend/TrustVault.Infrastructure/
 COPY backend/TrustVault.Migrator/TrustVault.Migrator.csproj backend/TrustVault.Migrator/
+COPY backend/TrustVault.Tests/TrustVault.Tests.csproj backend/TrustVault.Tests/
 RUN dotnet restore TrustVault.sln
 COPY backend/ backend/
 RUN dotnet publish backend/TrustVault.Api/TrustVault.Api.csproj --configuration Release --no-restore --output /out/api

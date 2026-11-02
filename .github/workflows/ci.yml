@@ -45,4 +45,9 @@ jobs:
         working-directory: frontend
       - run: npm audit --omit=dev
         working-directory: frontend
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - run: docker build --tag trustvault:ci .
