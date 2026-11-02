@@ -3,10 +3,11 @@
 ## Trust boundaries
 
 The Angular 21 application is an untrusted client. ASP.NET Core validates bearer
-tokens and is the only future boundary for document authorization. PostgreSQL
-holds identities, document metadata, per-user grants, versions, and audit events.
-Binary storage is intentionally not connected yet; Azure Blob Storage must use a
-private container and server-generated keys before upload/download stories ship.
+tokens and is the only future boundary for document authorization. PostgreSQL holds identities, document metadata, per-user grants, versions, and
+audit events. The selected prototype hosting direction is Render for the API,
+Angular static site, and managed PostgreSQL, with Cloudflare R2 for binary files.
+Binary storage is not connected yet; the R2 bucket must remain private and use
+server-generated object keys before upload/download stories ship.
 
 ## Authorization model
 
@@ -41,8 +42,8 @@ the server in later API stories.
 
 ## Planned file and audit controls
 
-- Keep the blob container private and route content through an authorized API
-  stream; do not return reusable public URLs.
+- Keep the R2 bucket private and route content through an authorized API stream;
+  do not return reusable public URLs.
 - Recheck grants on every metadata, download, edit, and permission request.
 - Revoke grants in PostgreSQL and make all subsequent access checks read current
   state; avoid long-lived SAS tokens/caches.
@@ -56,5 +57,8 @@ the server in later API stories.
 Secrets are supplied via .NET environment variables or a secret manager, never
 the Angular bundle. `Jwt:SigningKey` and `ConnectionStrings:TrustVault` are
 required by the API. `Frontend:Origin` configures the local CORS origin.
-Production deployment, HTTPS termination, managed PostgreSQL, Blob Storage,
-Key Vault, and operational monitoring remain unconfigured.
+Render/Cloudflare accounts and resources, production deployment, HTTPS,
+managed PostgreSQL, R2, runtime DB-role separation, and operational monitoring
+remain unconfigured. Render services must receive secrets through their
+environment/secret settings; Cloudflare API tokens belong only in the secret
+store of the deployment workflow and must be narrowly scoped.

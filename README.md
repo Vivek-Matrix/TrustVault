@@ -16,6 +16,18 @@ are not implemented yet.
 - `backend/TrustVault.Tests`: API authorization smoke tests.
 - PostgreSQL 16 is provided locally by Docker Compose.
 
+## Hosting direction
+
+The selected prototype hosting direction is Render for the ASP.NET Core API,
+Angular frontend, and managed PostgreSQL, with Cloudflare R2 for private document
+objects. GitHub Actions will run CI and later deploy from protected branches.
+This is a hosting decision, not a claim that deployment or document workflows are
+ready. Do not upload real confidential files until server-side document
+authorization, immediate revocation, secure storage, and audit behavior are
+implemented and tested.
+
+See [deployment plan](docs/deployment.md) before creating cloud resources.
+
 See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 [docs/backlog.md](docs/backlog.md), and [THREATS.md](THREATS.md).
 
@@ -81,7 +93,7 @@ npm audit --omit=dev
 
 CI runs the backend format/build/test/migration checks and the frontend lint,
 test, production build, and production dependency audit. Sprint 0 does not
-include an Azure deployment, public URL, seeded demo users, or demo video.
+include a Render deployment, public URL, seeded demo users, or demo video.
 
 ## Security status
 
