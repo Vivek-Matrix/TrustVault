@@ -1,0 +1,12 @@
+.git
+.github
+.config
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/.angular
+**/TestResults
+.env
+.env.*
+!.env.example

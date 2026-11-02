@@ -24,6 +24,28 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Readiness_endpoint_is_anonymous_and_reports_database_state()
+    {
+        var response = await _client.GetAsync("/api/system/ready");
+
+        Assert.Contains(
+            response.StatusCode,
+            new[]
+            {
+                System.Net.HttpStatusCode.OK,
+                System.Net.HttpStatusCode.ServiceUnavailable
+            });
+    }
+
+    [Fact]
+    public async Task Unknown_api_route_returns_not_found_instead_of_spa_fallback()
+    {
+        var response = await _client.GetAsync("/api/unknown-route");
+
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Protected_endpoint_rejects_anonymous_requests()
     {
         var response = await _client.GetAsync("/api/system/whoami");

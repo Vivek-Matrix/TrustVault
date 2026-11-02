@@ -8,7 +8,7 @@ public sealed class ApplicationDbContextFactory : IDesignTimeDbContextFactory<Ap
     public ApplicationDbContext CreateDbContext(string[] args)
     {
         var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__TrustVault")
-            ?? "Host=localhost;Port=5432;Database=trustvault;Username=trustvault_app;Password=local_only";
+            ?? "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only";
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseNpgsql(connectionString)
             .Options;

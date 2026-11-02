@@ -2,12 +2,13 @@
 
 ## Trust boundaries
 
-The Angular 21 application is an untrusted client. ASP.NET Core validates bearer
+The Angular 21 application is an untrusted client. ASP.NET Core 10 validates bearer
 tokens and is the only future boundary for document authorization. PostgreSQL holds identities, document metadata, per-user grants, versions, and
-audit events. The selected prototype hosting direction is Render for the API,
-Angular static site, and managed PostgreSQL, with Cloudflare R2 for binary files.
-Binary storage is not connected yet; the R2 bucket must remain private and use
-server-generated object keys before upload/download stories ship.
+audit events. The selected prototype hosting direction is a Render Docker Web
+Service serving both API and Angular on one origin, plus managed PostgreSQL.
+Cloudflare R2 is planned for binary files but is not connected yet; the R2 bucket
+must remain private and use server-generated object keys before upload/download
+stories ship.
 
 ## Authorization model
 
@@ -18,7 +19,8 @@ delete. An administrator does not inherit document access. A revoked grant is
 retained for history and takes effect when the server evaluates the active grant
 on each request.
 
-The API's fallback policy requires authentication; `/api/system/health` and the
+The API's fallback policy requires authentication; `/api/system/health`,
+`/api/system/ready`, and the
 development OpenAPI document are explicit anonymous exceptions. JWT validation
 requires a secret key supplied through configuration and rejects keys under 32
 UTF-8 bytes. JWT issuance, account suspension enforcement, document ACL handlers,
@@ -56,9 +58,9 @@ the server in later API stories.
 
 Secrets are supplied via .NET environment variables or a secret manager, never
 the Angular bundle. `Jwt:SigningKey` and `ConnectionStrings:TrustVault` are
-required by the API. `Frontend:Origin` configures the local CORS origin.
-Render/Cloudflare accounts and resources, production deployment, HTTPS,
-managed PostgreSQL, R2, runtime DB-role separation, and operational monitoring
-remain unconfigured. Render services must receive secrets through their
-environment/secret settings; Cloudflare API tokens belong only in the secret
-store of the deployment workflow and must be narrowly scoped.
+required by the API. `Frontend:Origin` configures the local CORS origin. Render
+and Cloudflare accounts/resources, production deployment, HTTPS, managed
+PostgreSQL, R2, runtime DB-role separation, and operational monitoring remain
+unconfigured. Render services must receive secrets through their environment
+settings; Cloudflare API tokens belong only in the secret store of the future
+storage integration and must be narrowly scoped.

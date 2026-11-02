@@ -7,12 +7,14 @@ are not implemented yet.
 ## Architecture
 
 - `frontend/`: Angular 21 and TypeScript.
-- `backend/TrustVault.Api`: ASP.NET Core 8 API, JWT validation, and deny-by-default
+- `backend/TrustVault.Api`: ASP.NET Core 10 API, JWT validation, and deny-by-default
   authentication policy.
 - `backend/TrustVault.Application`: application use cases (to be implemented).
 - `backend/TrustVault.Domain`: document, grant, version, audit, and role types.
 - `backend/TrustVault.Infrastructure`: ASP.NET Core Identity and PostgreSQL EF Core
   persistence.
+- `backend/TrustVault.Migrator`: one-shot EF Core database migration runner for
+  controlled deployment release commands.
 - `backend/TrustVault.Tests`: API authorization smoke tests.
 - PostgreSQL 16 is provided locally by Docker Compose.
 
@@ -33,7 +35,7 @@ See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 
 ## Requirements
 
-- .NET 8 SDK
+- .NET 10 SDK
 - Node.js 20.19+ or 22.12+ and npm
 - Docker Desktop with Docker Compose
 
@@ -42,8 +44,8 @@ See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 From the repository root in PowerShell:
 
 ```powershell
-docker compose up -d postgres
-$env:ConnectionStrings__TrustVault = "Host=localhost;Port=5432;Database=trustvault;Username=trustvault_app;Password=local_only"
+docker compose up -d --force-recreate postgres
+$env:ConnectionStrings__TrustVault = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only"
 $keyBytes = New-Object byte[] 32
 $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
 $rng.GetBytes($keyBytes)
@@ -53,7 +55,7 @@ $env:Jwt__Issuer = "TrustVault"
 $env:Jwt__Audience = "TrustVault"
 $env:Frontend__Origin = "http://localhost:4200"
 dotnet tool restore
-dotnet ef database update --project backend\TrustVault.Infrastructure --startup-project backend\TrustVault.Api
+dotnet run --project backend\TrustVault.Migrator
 dotnet run --project backend\TrustVault.Api
 ```
 
@@ -66,8 +68,9 @@ npm start
 ```
 
 The API listens at `http://localhost:5106` and the Angular app at
-`http://localhost:4200`. `GET /api/system/health` is anonymous; other routes
-require a valid JWT. No login/token-issuing endpoint exists in Sprint 0.
+`http://localhost:4200`. `GET /api/system/health` is anonymous; the readiness
+endpoint `GET /api/system/ready` also checks database connectivity. Other API
+routes require a valid JWT. No login/token-issuing endpoint exists in Sprint 0.
 The development API documentation is at `/swagger`.
 
 ## Database
@@ -77,7 +80,25 @@ The initial EF Core migration is in
 apply it to the Compose database before starting the API.
 
 The design-time context uses the configured connection string or the local
-Compose default. The Compose credentials are for local development only.
+Compose default. Compose publishes PostgreSQL on host port `55432` to avoid
+collisions with another local PostgreSQL instance; container port remains `5432`.
+The Compose credentials are for local development only. If the database
+container existed before the host-port change, the command above recreates the
+container while preserving its named volume. Do not use `docker compose down -v`;
+that would delete the local database volume.
+
+If the migrator reports PostgreSQL error `28P01`, first confirm that Compose is
+running from this repository folder. Then reset the local-only role password and
+test the published TCP port:
+
+```powershell
+docker compose exec -T postgres psql -U trustvault_app -d trustvault -c "ALTER ROLE trustvault_app WITH PASSWORD 'local_only';"
+docker run --rm --add-host=host.docker.internal:host-gateway -e PGPASSWORD=local_only postgres:16-alpine psql -h host.docker.internal -p 55432 -U trustvault_app -d trustvault -c "select current_user, current_database();"
+```
+
+Only continue when the TCP test succeeds. Then rerun
+`dotnet run --project backend\TrustVault.Migrator`. These commands apply only to
+the local Compose database and its non-production credentials.
 
 ## Verify
 
@@ -91,9 +112,10 @@ npm run build
 npm audit --omit=dev
 ```
 
-CI runs the backend format/build/test/migration checks and the frontend lint,
-test, production build, and production dependency audit. Sprint 0 does not
-include a Render deployment, public URL, seeded demo users, or demo video.
+CI runs the backend format/build/test/migration checks, a production Docker image
+build, and frontend lint/test/build/dependency audit. Render resources and a
+public URL still require manual provider setup. No seeded demo users or demo
+video are included.
 
 ## Security status
 

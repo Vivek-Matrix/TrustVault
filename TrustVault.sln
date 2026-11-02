@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TrustVault.Infrastructure",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TrustVault.Tests", "backend\TrustVault.Tests\TrustVault.Tests.csproj", "{AC7B7E76-97F6-47BD-BCE7-14EB6A49F426}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TrustVault.Migrator", "backend\TrustVault.Migrator\TrustVault.Migrator.csproj", "{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -85,6 +87,18 @@ Global
 		{AC7B7E76-97F6-47BD-BCE7-14EB6A49F426}.Release|x64.Build.0 = Release|Any CPU
 		{AC7B7E76-97F6-47BD-BCE7-14EB6A49F426}.Release|x86.ActiveCfg = Release|Any CPU
 		{AC7B7E76-97F6-47BD-BCE7-14EB6A49F426}.Release|x86.Build.0 = Release|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Debug|x64.Build.0 = Debug|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Debug|x86.Build.0 = Debug|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Release|Any CPU.Build.0 = Release|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Release|x64.ActiveCfg = Release|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Release|x64.Build.0 = Release|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Release|x86.ActiveCfg = Release|Any CPU
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -95,5 +109,6 @@ Global
 		{793E8BC9-4034-4727-8CAF-D8E343EC89E7} = {1AE8ACA6-933B-BF2A-3671-3E2EAC007D16}
 		{57D7AD23-EF7D-4BA9-A93C-2324CC4E7F40} = {1AE8ACA6-933B-BF2A-3671-3E2EAC007D16}
 		{AC7B7E76-97F6-47BD-BCE7-14EB6A49F426} = {1AE8ACA6-933B-BF2A-3671-3E2EAC007D16}
+		{33CEC762-9AA2-4EE1-A31A-D0E2DE0D9057} = {1AE8ACA6-933B-BF2A-3671-3E2EAC007D16}
 	EndGlobalSection
 EndGlobal

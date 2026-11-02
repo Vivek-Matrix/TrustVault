@@ -29,3 +29,21 @@ by its local hash.
 
 - The user-provided TrustVault product brief and Sprint 0 delivery instructions
   are the project-specific context used for this increment.
+
+## 2026-11-02 — Render deployment foundation
+
+- **Asked:** Continue Sprint 0 toward an internet-deployed Render/Cloudflare
+  prototype, apply the required code tasks, and give beginner-friendly manual
+  instructions.
+- **Produced:** Retargeted backend projects and EF tooling to .NET 10; added a
+  multi-stage root Dockerfile and a one-shot EF migrator; configured Render port
+  binding, database readiness, and Render PostgreSQL URL normalization; fixed
+  SPA fallback behavior for unknown API routes; moved the local Compose host
+  port to `55432`; documented local password troubleshooting and Render setup.
+- **Validation:** .NET format, Release build, and all 11 backend tests passed;
+  EF reports no pending model changes. Frontend lint, all 3 tests, production
+  build, and production dependency audit passed. Docker image build could not be
+  run because Docker CLI is unavailable in this environment. No Render or
+  Cloudflare resources were created, and the local database migration remains
+  a user-side verification step.
+- **Commit:** These changes are currently uncommitted.

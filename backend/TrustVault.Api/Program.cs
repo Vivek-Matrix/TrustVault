@@ -9,9 +9,12 @@ using TrustVault.Infrastructure.Persistence;
 using TrustVault.Infrastructure.Persistence.Entities;
 
 var builder = WebApplication.CreateBuilder(args);
+if (int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var renderPort))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{renderPort}");
+}
 
-var connectionString = builder.Configuration.GetConnectionString("TrustVault")
-    ?? throw new InvalidOperationException("ConnectionStrings:TrustVault must be configured.");
+var connectionString = DatabaseConnectionStrings.Get(builder.Configuration);
 var signingKey = builder.Configuration["Jwt:SigningKey"];
 if (string.IsNullOrWhiteSpace(signingKey) || Encoding.UTF8.GetByteCount(signingKey) < 32)
 {
@@ -75,6 +78,8 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -86,6 +91,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapFallback("/api/{**path}", () => Results.NotFound()).AllowAnonymous();
+app.MapFallbackToFile("index.html").AllowAnonymous();
 app.Run();
 
 public partial class Program { }
