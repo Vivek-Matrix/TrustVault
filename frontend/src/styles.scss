@@ -19,3 +19,23 @@ main {
 h1 {
   color: #183b67;
 }
+
+.field-error,
+.form-message {
+  color: #a52b2b;
+}
+
+.form-message {
+  margin: 0.8rem 0;
+  padding: 0.7rem;
+  border: 1px solid #f1caca;
+  border-radius: 0.5rem;
+  background: #fff7f7;
+  font-size: 0.9rem;
+}
+
+.success-message {
+  border-color: #b7ddd1;
+  background: #f1faf6;
+  color: #246653;
+}

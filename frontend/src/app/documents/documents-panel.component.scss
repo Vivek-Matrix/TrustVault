@@ -1,0 +1,169 @@
+:host {
+  display: block;
+}
+
+.documents-card {
+  box-sizing: border-box;
+  margin: 1.5rem auto 0;
+  max-width: 42rem;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  border: 1px solid #e1e7ef;
+  border-radius: 1.2rem;
+  background: #fff;
+}
+
+.section-heading,
+.list-heading,
+.document-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.35rem;
+  color: #387c70;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+h2,
+h3 {
+  margin: 0;
+  color: #183b67;
+}
+
+h2 {
+  font-size: 1.4rem;
+}
+
+.intro,
+.empty-state,
+.document-details span {
+  color: #657187;
+  line-height: 1.5;
+}
+
+.intro {
+  margin: 0.75rem 0 1rem;
+  font-size: 0.9rem;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+}
+
+label {
+  margin: 0.8rem 0 0.4rem;
+  color: #28374d;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input:not([type='file']) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.55rem;
+  color: #172033;
+  font: inherit;
+}
+
+input:focus {
+  border-color: #337f76;
+  outline: 3px solid #337f7626;
+}
+
+input[type='file'] {
+  padding: 0.35rem 0;
+}
+
+.field-hint,
+.field-error {
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.field-error {
+  color: #a52b2b;
+}
+
+.primary-button,
+.secondary-button {
+  min-height: 2.7rem;
+  border-radius: 0.55rem;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.primary-button {
+  margin-top: 1rem;
+  border: 0;
+  background: #183b67;
+  color: #fff;
+}
+
+.secondary-button {
+  border: 1px solid #cbd4df;
+  background: #f5f7fb;
+  color: #183b67;
+  padding: 0.55rem 0.75rem;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.list-heading {
+  margin-top: 1.8rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid #e7ebf1;
+}
+
+.list-heading h3 {
+  font-size: 1rem;
+}
+
+.empty-state {
+  margin: 1rem 0 0;
+}
+
+.document-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.document-item {
+  padding: 0.85rem 0;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.document-details {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.document-details span {
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 32rem) {
+  .document-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .download-button {
+    width: 100%;
+  }
+}

@@ -12,7 +12,6 @@
   color: #387c70;
   font-size: 0.75rem;
   font-weight: 700;
-  letter-spacing: 0.14em;
 }
 
 .brand h1 {
@@ -36,6 +35,10 @@ footer {
   border: 1px solid #e1e7ef;
   border-radius: 1.2rem;
   background: #fff;
+}
+
+.signed-in-card {
+  max-width: 48rem;
 }
 
 .mode-switch {
@@ -110,8 +113,7 @@ input:focus {
   line-height: 1.45;
 }
 
-.field-error,
-.form-message {
+.field-error {
   color: #a52b2b;
 }
 
@@ -130,15 +132,6 @@ input:focus {
 .primary-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-}
-
-.form-message {
-  margin: 0 0 0.5rem;
-  padding: 0.8rem;
-  border: 1px solid #f1caca;
-  border-radius: 0.5rem;
-  background: #fff7f7;
-  font-size: 0.9rem;
 }
 
 .security-note {

@@ -5,10 +5,13 @@ using System.Text.Json;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using TrustVault.Api.Models.Auth;
+using TrustVault.Api.Models.Documents;
 using TrustVault.Domain.Security;
+using TrustVault.Infrastructure.Persistence;
 using TrustVault.Infrastructure.Persistence.Entities;
 
 namespace TrustVault.Tests;
@@ -240,7 +243,188 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Document_endpoints_require_authentication()
+    {
+        using var list = await _client.GetAsync("/api/documents");
+        using var metadata = await _client.GetAsync($"/api/documents/{Guid.NewGuid()}");
+        using var download = await _client.GetAsync($"/api/documents/{Guid.NewGuid()}/content");
+
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, list.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, metadata.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, download.StatusCode);
+    }
+
+    [Fact]
+    public async Task Document_owner_can_upload_list_read_metadata_and_download()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var listRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/documents",
+            owner);
+        using var list = await _client.SendAsync(listRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, list.StatusCode);
+        var documents = await list.Content.ReadFromJsonAsync<DocumentResponse[]>();
+        Assert.NotNull(documents);
+        Assert.Contains(documents, item => item.Id == document.Id);
+
+        using var metadataRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}",
+            owner);
+        using var metadata = await _client.SendAsync(metadataRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, metadata.StatusCode);
+
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            owner);
+        using var download = await _client.SendAsync(downloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal(PdfBytes, await download.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Different_user_cannot_discover_or_download_document_and_attempts_are_audited()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        var otherUser = await RegisterAndGetSessionAsync();
+        using var listRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/documents",
+            otherUser);
+        using var otherUsersList = await _client.SendAsync(listRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, otherUsersList.StatusCode);
+        var otherUsersDocuments =
+            await otherUsersList.Content.ReadFromJsonAsync<DocumentResponse[]>();
+        Assert.NotNull(otherUsersDocuments);
+        Assert.DoesNotContain(otherUsersDocuments, item => item.Id == document.Id);
+
+        using var metadataRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}",
+            otherUser);
+        using var metadata = await _client.SendAsync(metadataRequest);
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            otherUser);
+        using var download = await _client.SendAsync(downloadRequest);
+
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, metadata.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, download.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var deniedEvents = await database.AuditEvents
+            .AsNoTracking()
+            .Where(item => item.DocumentId == document.Id
+                && item.Result == TrustVault.Domain.Audit.AuditResult.Denied)
+            .ToListAsync();
+        Assert.Equal(2, deniedEvents.Count);
+        Assert.All(deniedEvents, item => Assert.Equal(64, item.RecordHash.Length));
+    }
+
+    [Theory]
+    [InlineData("report.txt", "%PDF-1.7\nsample")]
+    [InlineData("report.pdf", "not a PDF")]
+    public async Task Upload_rejects_files_with_an_invalid_extension_or_signature(
+        string fileName,
+        string contents)
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        using var response = await UploadFileAsync(
+            owner,
+            fileName,
+            Encoding.ASCII.GetBytes(contents));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+
+        using var listRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/documents",
+            owner);
+        using var list = await _client.SendAsync(listRequest);
+        var documents = await list.Content.ReadFromJsonAsync<DocumentResponse[]>();
+        Assert.NotNull(documents);
+        Assert.Empty(documents);
+    }
+
+    [Fact]
+    public async Task Upload_rejects_files_larger_than_the_limit()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var oversizedPdf = new byte[10 * 1024 * 1024 + 1];
+        Encoding.ASCII.GetBytes("%PDF-1.7").CopyTo(oversizedPdf, 0);
+
+        using var response = await UploadFileAsync(
+            owner,
+            "large.pdf",
+            oversizedPdf);
+
+        Assert.Contains(
+            response.StatusCode,
+            new[]
+            {
+                System.Net.HttpStatusCode.BadRequest,
+                System.Net.HttpStatusCode.RequestEntityTooLarge
+            });
+    }
+
     private const string TestPassword = "ValidPassword123!";
+    private static readonly byte[] PdfBytes = Encoding.ASCII.GetBytes(
+        "%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF");
+
+    private async Task<string> RegisterAndGetSessionAsync()
+    {
+        using var response = await RegisterAsync(NewEmail());
+        Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
+        var auth = await response.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(auth);
+        return auth.AccessToken;
+    }
+
+    private Task<HttpResponseMessage> UploadPdfAsync(string accessToken) =>
+        UploadFileAsync(accessToken, "report.pdf", PdfBytes);
+
+    private async Task<HttpResponseMessage> UploadFileAsync(
+        string accessToken,
+        string fileName,
+        byte[] fileContents)
+    {
+        using var content = new MultipartFormDataContent();
+        content.Add(new StringContent("Project report"), "Title");
+        content.Add(new StringContent("Sprint 2"), "Category");
+        content.Add(new ByteArrayContent(fileContents), "File", fileName);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/documents")
+        {
+            Content = content
+        };
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        return await _client.SendAsync(request);
+    }
+
+    private static HttpRequestMessage CreateAuthorizedRequest(
+        HttpMethod method,
+        string path,
+        string accessToken)
+    {
+        var request = new HttpRequestMessage(method, path);
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        return request;
+    }
 
     private async Task<HttpResponseMessage> RegisterAsync(string email)
     {
@@ -291,9 +475,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public const string SigningKey = "trustvault-test-signing-key-32-bytes-minimum";
     private readonly Dictionary<string, string?> _previousEnvironmentValues;
+    private readonly string _storageRoot;
 
     public ApiFactory()
     {
+        _storageRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"trustvault-tests-{Guid.NewGuid():N}");
         var testSettings = new Dictionary<string, string>
         {
             ["ConnectionStrings__TrustVault"] =
@@ -305,6 +493,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         testSettings["ConnectionStrings__TrustVault"] =
             "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only";
         testSettings["Jwt__AccessTokenLifetimeMinutes"] = "15";
+        testSettings["RateLimits__AuthenticationPermitLimit"] = "100";
+        testSettings["Storage__RootPath"] = _storageRoot;
         _previousEnvironmentValues = testSettings.Keys.ToDictionary(
             name => name,
             Environment.GetEnvironmentVariable);
@@ -321,6 +511,11 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         foreach (var setting in _previousEnvironmentValues)
         {
             Environment.SetEnvironmentVariable(setting.Key, setting.Value);
+        }
+
+        if (Directory.Exists(_storageRoot))
+        {
+            Directory.Delete(_storageRoot, recursive: true);
         }
     }
 }

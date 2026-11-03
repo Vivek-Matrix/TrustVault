@@ -1,21 +1,25 @@
 # TrustVault
 
-TrustVault is a secure document-sharing platform. The repository has the
-project foundation and a first Sprint 1 authentication slice; document
-workflows, refresh-token issuance, and audit writing are not implemented yet.
+TrustVault is a secure document-sharing platform. Sprint 1 authentication is
+implemented, and Sprint 2 adds an owner-only document API slice with private
+local PDF storage and audit events. Sharing, refresh-token issuance, the
+production deployment, and named-user sharing are not implemented yet.
 
 ## Architecture
 
 - `frontend/`: Angular 21 and TypeScript.
 - `backend/TrustVault.Api`: ASP.NET Core 10 API, Identity registration/login,
-  short-lived JWT validation, and deny-by-default authorization policy.
-- `backend/TrustVault.Application`: application use cases (to be implemented).
+  short-lived JWT validation, deny-by-default authorization policy, and
+  owner-authorized document endpoints.
+- `backend/TrustVault.Application`: application use cases and private document
+  storage contract.
 - `backend/TrustVault.Domain`: document, grant, version, audit, and role types.
 - `backend/TrustVault.Infrastructure`: ASP.NET Core Identity and PostgreSQL EF Core
   persistence.
 - `backend/TrustVault.Migrator`: one-shot EF Core database migration runner for
   controlled deployment release commands.
-- `backend/TrustVault.Tests`: API authorization smoke tests.
+- `backend/TrustVault.Tests`: API authentication and document authorization
+  integration tests.
 - PostgreSQL 16 is provided locally by Docker Compose.
 
 ## Hosting direction
@@ -35,8 +39,8 @@ image is built by CI; it is not published to AWS.
 The earlier Render deployment instructions are superseded. See the
 [AWS deployment status and prerequisites](docs/deployment.md) before taking
 deployment steps. Do not upload real confidential files until server-side
-document authorization, immediate revocation, secure storage, and audit behavior
-are implemented and tested.
+named-user authorization, immediate revocation, production-grade storage, and
+audit integrity controls are implemented and tested.
 
 See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 [docs/backlog.md](docs/backlog.md), and [THREATS.md](THREATS.md).
@@ -62,6 +66,8 @@ $env:Jwt__SigningKey = [Convert]::ToBase64String($keyBytes)
 $env:Jwt__Issuer = "TrustVault"
 $env:Jwt__Audience = "TrustVault"
 $env:Frontend__Origin = "http://localhost:4200"
+# Optional: documents are stored outside wwwroot at this path by default.
+# $env:Storage__RootPath = "C:\TrustVaultData\documents"
 dotnet tool restore
 dotnet run --project backend\TrustVault.Migrator
 dotnet run --project backend\TrustVault.Api
@@ -82,6 +88,29 @@ Viewer role. Authentication returns a 15-minute bearer token by default,
 configurable to 5-30 minutes with `Jwt:AccessTokenLifetimeMinutes`. The Angular
 client keeps the token in memory only, so closing or reloading the page signs
 the user out. The development API documentation is at `/swagger`.
+
+After signing in, the Angular screen lets you upload, list, refresh, and
+download your own PDFs. Uploads are limited to 10 MiB. The server checks the
+file extension and `%PDF-` signature, then stores it under an opaque generated
+key outside the static web root. The current filesystem provider is for local
+development only. Use dummy files, not confidential documents.
+
+### Try the document screen
+
+1. Keep the API running in the first PowerShell window.
+2. In a second PowerShell window, run `Set-Location frontend` and then
+   `npm start`.
+3. Open `http://localhost:4200`, create an account, and sign in.
+4. In **Documents**, enter a title/category, choose a small dummy PDF, and
+   select **Upload PDF**. The uploaded file appears in your list; use
+   **Download** to save it.
+5. Sign out, create a second test account, and confirm its document list is
+   empty. Automated API tests separately verify that a different account
+   cannot retrieve another owner's document, even with its ID.
+
+Do not use real confidential files. The browser keeps the access token only in
+memory; refreshing or closing the page signs the user out. The current UI does
+not provide sharing or permission management.
 
 ## Database
 
@@ -134,11 +163,15 @@ The API validates JWT signatures, issuer, audience, and expiration, and applies
 an authenticated-user fallback policy. Registration assigns the least-privilege
 Viewer role; passwords use Identity's configured requirements and hashing.
 Failed sign-ins trigger Identity lockout, and authentication routes have an
-in-memory per-IP rate limit. Refresh tokens, email verification, password
-recovery, user suspension administration and enforcement for existing tokens,
-document permission policy handlers, upload validation, storage integration,
-audit hash chaining, and production DB-role separation remain follow-up work.
-An endpoint is not considered secure merely because its UI is hidden.
+in-memory per-IP rate limit. Document metadata and downloads are restricted to
+the owner on every request; unauthorized users receive 404. Upload, list,
+metadata, download, and denied access events are recorded using a serialized
+hash chain. The chain is not verified or protected from a privileged database
+operator, so it is not tamper-proof. Named-user grants and revocation, complete
+PDF validation/malware scanning, refresh tokens, email verification, password
+recovery, user suspension management, production storage, and a restricted
+production DB role remain follow-up work. An endpoint is not secure merely
+because its UI is hidden.
 
 ## First commit plan
 

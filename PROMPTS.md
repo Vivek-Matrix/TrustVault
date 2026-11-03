@@ -144,3 +144,46 @@ written; the repository now has an `origin` remote.
   isolated temporary copy, and local dependencies were restored afterward.
   No dependency manifest changes were made. GitHub Actions has not run because
   the changes are still uncommitted.
+
+## 2026-11-03 — Sprint 2 owner-only document API
+
+- **Asked:** Treat the owner as a beginner who can perform guided manual work,
+  explain whether Sprint 2 can start without manual prerequisites, then build
+  the planned first document-security slice.
+- **Produced:** Added authenticated PDF upload, owner-scoped list/metadata/
+  download endpoints, generated private filesystem keys, size/extension/
+  signature checks, and transaction-serialized SHA-256 chained audit events.
+  Added API/storage tests and updated API, architecture, threat, backlog, and
+  setup documentation. The storage provider is explicitly local-only; the
+  audit chain is not claimed to be tamper-proof.
+- **What needed correction:** The first test run could not complete its
+  database-backed cases because Docker Desktop/PostgreSQL was unavailable.
+  A focused storage test then caught that the test attempted to delete an open
+  file; the test was corrected to close its read stream before deletion.
+- **What I did instead:** Initially, the database-backed tests could not run
+  because Docker Desktop was unavailable. After the owner started Docker
+  Desktop, migrations succeeded. The first full run exposed that the shared
+  test server exhausted the production-sized per-IP auth rate limit across
+  many test cases; added a configurable permit limit and raised it only in the
+  test host. The full solution test run then passed all 28 tests. The solution
+  builds without warnings, .NET format verification passes, and EF reports no
+  pending model changes. No AWS resources or real documents were used.
+- **Commit:** Pending; record the commit reference after the changes are
+  committed.
+
+## 2026-11-03 — Angular document screen
+
+- **Asked:** Add the owner-only upload, list, and download features to the UI.
+- **Produced:** Added a signed-in Documents panel for PDF upload, list refresh,
+  and download. It shows loading/success/error feedback and rejects non-PDF
+  extensions and files over 10 MiB before sending them. Added Angular tests for
+  auth headers, listing, upload, download, size rejection, errors, and signed-in
+  visibility. Updated local-use instructions and sprint/security notes.
+- **What needed correction:** The first test run found a test assertion expected
+  different wording than the component's real validation message. The first
+  build also exceeded the existing 2 KiB per-component style budget.
+- **What I did instead:** Corrected the assertion and moved shared form-message
+  styles into the global stylesheet. Frontend lint, all 11 tests, and
+  production build now pass without style-budget warnings.
+- **Commit:** Pending; record the commit reference after the changes are
+  committed.

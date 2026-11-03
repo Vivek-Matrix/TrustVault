@@ -32,37 +32,44 @@ rotation remain future work.
 ## Data model
 
 Identity tables are created by ASP.NET Core Identity. `documents` stores metadata
-and an opaque storage key, never a client-provided path. `document_grants`
+and an opaque storage key, never a client-provided path. Current document
+endpoints filter by the authenticated owner on every request. `document_grants`
 preserves grant/revocation history and permits at most one active grant for a
 document/user pair. `document_versions` has a unique version number per
-document. `audit_events` stores request/actor/result fields and hash-chain slots. EF saves
-reject modifications/deletions and the initial migration adds a PostgreSQL
-update/delete trigger; hash creation/verification and restricted production DB
-roles are not implemented yet.
+document. `audit_events` stores request/actor/result fields and a serialized
+SHA-256 hash chain. Audit writes are serialized with a PostgreSQL transaction
+advisory lock. EF saves reject modifications/deletions and the initial migration
+adds a PostgreSQL update/delete trigger. Chain verification, external anchoring,
+and restricted production database roles are not implemented, so this is not
+tamper-proof against a privileged database operator.
 
 The EF model adds indexes for owner/date, category/date, grant user/document,
 version ordering, and audit actor/document/time queries. User identifiers,
 ownership, permission level, and storage keys must be derived or authorized by
 the server in later API stories.
 
-## Planned file and audit controls
+## File and audit controls
 
-- Keep the R2 bucket private and route content through an authorized API stream;
-  do not return reusable public URLs.
-- Recheck grants on every metadata, download, edit, and permission request.
-- Revoke grants in PostgreSQL and make all subsequent access checks read current
-  state; avoid long-lived SAS tokens/caches.
-- Append audit rows in the same transaction as the corresponding state change.
-  Keep the database trigger, use a runtime DB role that cannot alter schema, and
-  add a serialized, verified hash chain before claiming tamper resistance.
-- Audit both successful and denied security actions without storing file content.
+- The current local provider stores PDFs under a configured filesystem root
+  outside the static web root and streams them only through the authorized API.
+  The provider is not suitable for production or multiple application replicas.
+- Uploads are limited to 10 MiB and checked for a `.pdf` extension and `%PDF-`
+  signature. Full PDF parsing, malware scanning, quotas, and production private
+  object storage remain future work.
+- Every implemented metadata/download request checks the authenticated owner;
+  named-user grants and immediate revocation are not implemented.
+- Upload metadata and its success audit event commit in one database
+  transaction. Denied metadata/download attempts and other successful document
+  operations are recorded. Chain verification and protection from a privileged
+  database operator remain necessary before claiming tamper resistance.
 
 ## Configuration
 
 Secrets are supplied via .NET environment variables or a secret manager, never
 the Angular bundle. `Jwt:SigningKey` and `ConnectionStrings:TrustVault` are
 required by the API. `Frontend:Origin` configures the local CORS origin. AWS
-production resources, HTTPS, managed PostgreSQL, private object storage, runtime
-DB-role separation, and operational monitoring remain unconfigured. AWS
+production resources, HTTPS, managed PostgreSQL, durable private object
+storage, runtime DB-role separation, and operational monitoring remain
+unconfigured. AWS
 credentials and application secrets must not be committed to source control or
 included in the frontend bundle.

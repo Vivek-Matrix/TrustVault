@@ -9,6 +9,8 @@ using Microsoft.IdentityModel.Tokens;
 using System.Threading.RateLimiting;
 using TrustVault.Domain.Security;
 using TrustVault.Api.Services;
+using TrustVault.Application.Documents;
+using TrustVault.Infrastructure.Documents;
 using TrustVault.Infrastructure.Persistence;
 using TrustVault.Infrastructure.Persistence.Entities;
 
@@ -41,6 +43,14 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
+builder.Services.AddScoped<DocumentAuditWriter>();
+var documentStorageRoot = builder.Configuration["Storage:RootPath"]
+    ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data", "documents");
+var authenticationRateLimit = builder.Configuration.GetValue(
+    "RateLimits:AuthenticationPermitLimit",
+    10);
+builder.Services.AddSingleton<IPrivateDocumentStorage>(
+    new FileSystemPrivateDocumentStorage(documentStorageRoot));
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -49,7 +59,7 @@ builder.Services.AddRateLimiter(options =>
             $"{context.Connection.RemoteIpAddress?.ToString() ?? "unknown"}:{context.Request.Path}",
             _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 10,
+                PermitLimit = authenticationRateLimit,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
                 AutoReplenishment = true

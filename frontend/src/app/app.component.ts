@@ -4,10 +4,11 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { RouterOutlet } from '@angular/router';
 import { finalize } from 'rxjs';
 import { AuthService } from './auth/auth.service';
+import { DocumentsPanelComponent } from './documents/documents-panel.component';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, ReactiveFormsModule],
+  imports: [DocumentsPanelComponent, RouterOutlet, ReactiveFormsModule],
   template: `
     <main>
       <header class="brand">
@@ -17,7 +18,7 @@ import { AuthService } from './auth/auth.service';
       </header>
 
       @if (auth.session(); as session) {
-        <section class="auth-card" aria-labelledby="signed-in-heading">
+        <section class="auth-card signed-in-card" aria-labelledby="signed-in-heading">
           <div class="status-mark" aria-hidden="true">✓</div>
           <h2 id="signed-in-heading">You're signed in</h2>
           <p class="account-email">{{ session.email }}</p>
@@ -25,6 +26,7 @@ import { AuthService } from './auth/auth.service';
           <p class="session-note">
             This session stays in memory and ends when you sign out or close this page.
           </p>
+          <app-documents-panel />
           <button class="secondary-button" type="button" (click)="logout()">Sign out</button>
         </section>
       } @else {
