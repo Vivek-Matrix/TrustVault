@@ -16,11 +16,12 @@ controls are not.
 
 Roles are `Administrator`, `DocumentOwner`, and `Viewer`. Roles describe broad
 capabilities, not document access. The per-document ACL is a grant to a named
-user with `Read` or `Edit`; only the owner may grant or revoke. An administrator
-does not inherit document access. A revoked grant is retained for history and
-takes effect when the server evaluates active grants on each request. `Edit` is
-currently recorded as a permission but has no editing endpoint; it allows the
-same read/download actions as `Read`.
+user; only the owner may grant or revoke. `Read` grants allow viewing and
+download. `Edit` grants additionally allow metadata updates and PDF replacement
+or page edits; each operation checks the active grant on the server. An
+administrator does not inherit document access. A revoked grant is retained
+for history and takes effect when the server evaluates active grants on each
+request.
 
 The API's fallback policy requires authentication; health, registration/login,
 and the development OpenAPI document are explicit anonymous exceptions. The
@@ -41,9 +42,11 @@ at most one active grant for a document/user pair. `document_versions` has a uni
 document. `audit_events` stores request/actor/result fields and a serialized
 SHA-256 hash chain. Audit writes are serialized with a PostgreSQL transaction
 advisory lock. EF saves reject modifications/deletions and the initial migration
-adds a PostgreSQL update/delete trigger. Chain verification, external anchoring,
-and restricted production database roles are not implemented, so this is not
-tamper-proof against a privileged database operator.
+adds a PostgreSQL update/delete trigger. The migrator's `--verify-audit` command
+checks stored event hashes and links in order. External anchoring and restricted
+production database roles are not implemented, so verification cannot detect
+tail deletion or a complete rewrite by a privileged database operator; this is
+not tamper-proof evidence.
 
 The EF model adds indexes for owner/date, category/date, grant user/document,
 version ordering, and audit actor/document/time queries. User identifiers,
@@ -52,19 +55,37 @@ server.
 
 ## File and audit controls
 
-- The current local provider stores PDFs under a configured filesystem root
+- The current local provider stores uploaded documents under a configured filesystem root
   outside the static web root and streams them only through the authorized API.
   The provider is not suitable for production or multiple application replicas.
-- Uploads are limited to 10 MiB and checked for a `.pdf` extension and `%PDF-`
-  signature. Full PDF parsing, malware scanning, quotas, and production private
-  object storage remain future work.
+- Uploads are limited to 10 MiB and support PDF, TXT, DOC, and DOCX. The API
+  validates the extension and format-specific signature/structure before
+  storage. Malware scanning, quotas, and production private object storage
+  remain future work. The page editor and content-replacement operation remain
+  PDF-only; TXT and Word text use a separate text editor.
+- TXT editing is performed by the API. DOC/DOCX conversion runs in a separate
+  LibreOffice container that has no database credentials or document-storage
+  mount, has no published host port, is reachable only over an internal
+  converter network, and is constrained by container resource limits. Local
+  development uses a resource-limited Nginx relay bound to loopback; the relay
+  is not part of the production design. Word text editing saves a simplified
+  DOCX and does not preserve formatting or embedded media.
 - Every implemented list/metadata/download request checks ownership or an
   active named-user grant. Revocation is checked live, so it takes effect on
   the next request.
+- Editing endpoints require ownership or an active `Edit` grant. Replacing a
+  PDF preserves its previous contents as a downloadable version. A redaction
+  save flattens pages to images, clears version records, and attempts to delete
+  prior stored files; filesystem backup copies and downloaded files cannot be
+  revoked or reliably erased by the application.
+- In the browser editor, existing-text changes are visual cover-and-replace
+  operations. Saving page edits produces image-based pages, removing text
+  search/selection, links, forms, signatures, and accessibility features.
 - Upload metadata and its success audit event commit in one database
   transaction. Denied metadata/download attempts and other successful document
-  operations are recorded. Chain verification and protection from a privileged
-  database operator remain necessary before claiming tamper resistance.
+  operations are recorded. The local migrator can verify hashes and links for
+  stored records. External anchoring and protection from a privileged database
+  operator remain necessary before claiming tamper resistance.
 
 ## Configuration
 

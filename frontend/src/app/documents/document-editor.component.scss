@@ -1,0 +1,220 @@
+:host {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: block;
+}
+
+.editor-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 1rem;
+  background: #101b2bcc;
+}
+
+.editor-dialog {
+  box-sizing: border-box;
+  max-width: 76rem;
+  min-height: calc(100vh - 2rem);
+  margin: 0 auto;
+  padding: clamp(1rem, 3vw, 2rem);
+  border-radius: 1rem;
+  background: #fff;
+  color: #172033;
+}
+
+.editor-heading,
+.tool-row,
+.page-controls,
+.version-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.3rem;
+  color: #387c70;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+h2,
+h3 {
+  color: #183b67;
+}
+
+.editor-layout {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.35fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.editor-sidebar {
+  padding-right: 1rem;
+  border-right: 1px solid #e1e7ef;
+}
+
+.editor-sidebar h3:not(:first-child) {
+  margin-top: 1.6rem;
+}
+
+label {
+  display: block;
+  margin: 0.7rem 0 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+input:not([type='file']),
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.45rem;
+  color: #172033;
+  font: inherit;
+}
+
+textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.primary-button,
+.secondary-button,
+.tool-row button,
+.page-controls button {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.45rem;
+  background: #f5f7fb;
+  color: #183b67;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.primary-button {
+  margin-top: 0.7rem;
+  border: 0;
+  background: #183b67;
+  color: #fff;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.editor-hint,
+.flatten-warning {
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.flatten-warning {
+  padding: 0.7rem;
+  border-left: 4px solid #b36a12;
+  background: #fff6e8;
+}
+
+.tool-row {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.tool-row button.active {
+  border-color: #183b67;
+  background: #183b67;
+  color: #fff;
+}
+
+.page-controls {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin: 0.8rem 0;
+}
+
+.page-controls span {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.danger-button {
+  color: #a32626 !important;
+}
+
+.pdf-page {
+  display: block;
+  width: 100%;
+  max-height: 72vh;
+  border: 1px solid #d5dce5;
+  background: #fff;
+  object-fit: contain;
+  touch-action: none;
+}
+
+.canvas-wrap {
+  position: relative;
+}
+
+.selection-preview {
+  position: absolute;
+  border: 2px dashed #d12b2b;
+  background: #d12b2b22;
+  pointer-events: none;
+}
+
+.save-pdf-button {
+  width: 100%;
+}
+
+.version-list {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.version-list li {
+  align-items: flex-start;
+  font-size: 0.82rem;
+}
+
+.editor-error,
+.editor-message {
+  padding: 0.65rem;
+  border-radius: 0.4rem;
+}
+
+.editor-error {
+  background: #fff0f0;
+  color: #a32626;
+}
+
+.editor-message {
+  background: #edf8f3;
+  color: #24644b;
+}
+
+@media (max-width: 52rem) {
+  .editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-sidebar {
+    padding-right: 0;
+    border-right: 0;
+    border-bottom: 1px solid #e1e7ef;
+    padding-bottom: 1rem;
+  }
+}

@@ -23,6 +23,17 @@ export interface DocumentGrantItem {
   grantedAtUtc: string;
 }
 
+export interface DocumentVersionItem {
+  versionNumber: number;
+  originalFileName: string;
+  sizeBytes: number;
+  createdAtUtc: string;
+}
+
+export interface DocumentEditableText {
+  text: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class DocumentService {
   private readonly http = inject(HttpClient);
@@ -66,6 +77,56 @@ export class DocumentService {
   revokeAccess(documentId: string, userId: string): Observable<void> {
     return this.http.delete<void>(
       `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants/${encodeURIComponent(userId)}`,
+    );
+  }
+
+  updateMetadata(
+    documentId: string,
+    metadata: { title: string; description: string; category: string },
+  ): Observable<DocumentItem> {
+    return this.http.put<DocumentItem>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}`,
+      metadata,
+    );
+  }
+
+  replaceContent(
+    documentId: string,
+    file: File,
+    purgePreviousVersions = false,
+  ): Observable<DocumentItem> {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    formData.append('purgePreviousVersions', String(purgePreviousVersions));
+    return this.http.put<DocumentItem>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/content`,
+      formData,
+    );
+  }
+
+  getEditableText(documentId: string): Observable<DocumentEditableText> {
+    return this.http.get<DocumentEditableText>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/editable-text`,
+    );
+  }
+
+  updateEditableText(documentId: string, text: string): Observable<DocumentItem> {
+    return this.http.put<DocumentItem>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/editable-text`,
+      { text },
+    );
+  }
+
+  listVersions(documentId: string): Observable<DocumentVersionItem[]> {
+    return this.http.get<DocumentVersionItem[]>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/versions`,
+    );
+  }
+
+  downloadVersion(documentId: string, versionNumber: number): Observable<Blob> {
+    return this.http.get(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/versions/${versionNumber}/content`,
+      { responseType: 'blob' },
     );
   }
 }

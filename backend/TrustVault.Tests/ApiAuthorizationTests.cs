@@ -1,15 +1,21 @@
+using System.IO.Compression;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
 using TrustVault.Api.Models.Auth;
 using TrustVault.Api.Models.Documents;
+using TrustVault.Api.Services;
 using TrustVault.Domain.Security;
 using TrustVault.Infrastructure.Persistence;
 using TrustVault.Infrastructure.Persistence.Entities;
@@ -336,11 +342,8 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         Assert.All(deniedEvents, item => Assert.Equal(64, item.RecordHash.Length));
     }
 
-    [Theory]
-    [InlineData("READ")]
-    [InlineData("EDIT")]
-    public async Task Owner_can_grant_access_and_shared_user_can_read_until_revoked(
-        string permission)
+    [Fact]
+    public async Task Owner_can_grant_read_access_and_shared_user_can_read_until_revoked()
     {
         var owner = await RegisterAndGetSessionAsync();
         var recipient = await RegisterAndGetSessionAsync();
@@ -356,7 +359,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
             JsonContent.Create(new
             {
                 email = recipient.Email,
-                permission
+                permission = "READ"
             }));
         using var granted = await _client.SendAsync(grantRequest);
         Assert.Equal(System.Net.HttpStatusCode.Created, granted.StatusCode);
@@ -374,7 +377,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         var activeGrant = Assert.Single(activeGrants!);
         Assert.Equal(recipient.UserId, activeGrant.UserId.ToString());
         Assert.Equal(recipient.Email, activeGrant.Email);
-        Assert.Equal(permission, activeGrant.Permission);
+        Assert.Equal("READ", activeGrant.Permission);
 
         using var listRequest = CreateAuthorizedRequest(
             HttpMethod.Get,
@@ -387,7 +390,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         var sharedDocument = Assert.Single(sharedDocuments);
         Assert.Equal(document.Id, sharedDocument.Id);
         Assert.False(sharedDocument.IsOwner);
-        Assert.Equal(permission, sharedDocument.Permission);
+        Assert.Equal("READ", sharedDocument.Permission);
 
         using var metadataRequest = CreateAuthorizedRequest(
             HttpMethod.Get,
@@ -463,7 +466,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Owner_can_change_active_permission_without_mutating_grant_history()
+    public async Task Owner_can_upgrade_read_grant_to_edit_without_losing_grant_history()
     {
         var owner = await RegisterAndGetSessionAsync();
         var recipient = await RegisterAndGetSessionAsync();
@@ -498,13 +501,383 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
             .ToListAsync();
         Assert.Equal(2, history.Count);
         Assert.NotNull(history[0].RevokedAtUtc);
+        Assert.Equal(TrustVault.Domain.Documents.DocumentPermission.Read, history[0].Permission);
         Assert.Null(history[1].RevokedAtUtc);
         Assert.Equal(TrustVault.Domain.Documents.DocumentPermission.Edit, history[1].Permission);
     }
 
+    [Fact]
+    public async Task Edit_grantee_can_update_metadata_and_replace_content_but_read_grantee_cannot()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var editor = await RegisterAndGetSessionAsync();
+        var reader = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var editorGrantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new { email = editor.Email, permission = "EDIT" }));
+        using var editorGrant = await _client.SendAsync(editorGrantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, editorGrant.StatusCode);
+
+        using var readerGrantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new { email = reader.Email, permission = "READ" }));
+        using var readerGrant = await _client.SendAsync(readerGrantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, readerGrant.StatusCode);
+
+        using var readerMetadataRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}",
+            reader,
+            JsonContent.Create(new
+            {
+                title = "Unauthorized title",
+                description = (string?)null,
+                category = "Test"
+            }));
+        using var readerMetadata = await _client.SendAsync(readerMetadataRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, readerMetadata.StatusCode);
+
+        using var readerReplacementRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}/content",
+            reader,
+            CreatePdfContent("replacement.pdf", Encoding.ASCII.GetBytes("%PDF-1.7\nblocked")));
+        using var readerReplacement = await _client.SendAsync(readerReplacementRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, readerReplacement.StatusCode);
+
+        using var editorMetadataRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}",
+            editor,
+            JsonContent.Create(new
+            {
+                title = "Updated title",
+                description = "Updated by editor",
+                category = "Reviewed"
+            }));
+        using var editorMetadata = await _client.SendAsync(editorMetadataRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, editorMetadata.StatusCode);
+        var updatedDocument = await editorMetadata.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(updatedDocument);
+        Assert.Equal("Updated title", updatedDocument.Title);
+        Assert.Equal("Updated by editor", updatedDocument.Description);
+        Assert.Equal("Reviewed", updatedDocument.Category);
+        Assert.Equal("EDIT", updatedDocument.Permission);
+
+        var replacementBytes = Encoding.ASCII.GetBytes("%PDF-1.7\nreplacement contents");
+        using var editorReplacementRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}/content",
+            editor,
+            CreatePdfContent("replacement.pdf", replacementBytes));
+        using var editorReplacement = await _client.SendAsync(editorReplacementRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, editorReplacement.StatusCode);
+
+        using var editorDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            editor);
+        using var editorDownload = await _client.SendAsync(editorDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, editorDownload.StatusCode);
+        Assert.Equal(replacementBytes, await editorDownload.Content.ReadAsByteArrayAsync());
+
+        using var versionsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/versions",
+            reader);
+        using var versionsResponse = await _client.SendAsync(versionsRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, versionsResponse.StatusCode);
+        var versions = await versionsResponse.Content.ReadFromJsonAsync<DocumentVersionResponse[]>();
+        Assert.NotNull(versions);
+        var previousVersion = Assert.Single(versions);
+        Assert.Equal(1, previousVersion.VersionNumber);
+
+        using var previousVersionRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/versions/1/content",
+            reader);
+        using var previousVersionResponse = await _client.SendAsync(previousVersionRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, previousVersionResponse.StatusCode);
+        Assert.Equal(PdfBytes, await previousVersionResponse.Content.ReadAsByteArrayAsync());
+
+        var redactedBytes = Encoding.ASCII.GetBytes("%PDF-1.7\nredacted");
+        var redactedContent = CreatePdfContent("redacted.pdf", redactedBytes, true);
+        using var redactionRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}/content",
+            editor,
+            redactedContent);
+        using var redactionResponse = await _client.SendAsync(redactionRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, redactionResponse.StatusCode);
+
+        using var versionsAfterRedactionRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/versions",
+            reader);
+        using var versionsAfterRedaction = await _client.SendAsync(versionsAfterRedactionRequest);
+        var remainingVersions =
+            await versionsAfterRedaction.Content.ReadFromJsonAsync<DocumentVersionResponse[]>();
+        Assert.NotNull(remainingVersions);
+        Assert.Empty(remainingVersions);
+
+        using var oldVersionAfterRedactionRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/versions/1/content",
+            reader);
+        using var oldVersionAfterRedaction =
+            await _client.SendAsync(oldVersionAfterRedactionRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, oldVersionAfterRedaction.StatusCode);
+    }
+
+    [Fact]
+    public async Task Existing_edit_grant_remains_read_only_and_is_listed_as_edit()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var recipient = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var database = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            database.DocumentGrants.Add(new TrustVault.Domain.Documents.DocumentGrant
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = document.Id,
+                UserId = Guid.Parse(recipient.UserId),
+                Permission = TrustVault.Domain.Documents.DocumentPermission.Edit,
+                GrantedByUserId = Guid.Parse(owner.UserId),
+                GrantedAtUtc = DateTime.UtcNow
+            });
+            await database.SaveChangesAsync();
+        }
+
+        using var listRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/documents",
+            recipient);
+        using var list = await _client.SendAsync(listRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, list.StatusCode);
+        var sharedDocuments = await list.Content.ReadFromJsonAsync<DocumentResponse[]>();
+        Assert.NotNull(sharedDocuments);
+        var sharedDocument = Assert.Single(sharedDocuments);
+        Assert.Equal("EDIT", sharedDocument.Permission);
+
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            recipient);
+        using var download = await _client.SendAsync(downloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal(PdfBytes, await download.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Upload_accepts_supported_document_types_and_preserves_the_content_type()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var files = new[]
+        {
+            (FileName: "notes.txt", Bytes: Encoding.UTF8.GetBytes("Plain text content")),
+            (FileName: "legacy.doc", Bytes: new byte[]
+            {
+                0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00
+            }),
+            (FileName: "report.docx", Bytes: CreateDocxBytesForTest())
+        };
+
+        foreach (var (fileName, bytes) in files)
+        {
+            using var upload = await UploadFileAsync(owner.AccessToken, fileName, bytes);
+            Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+            var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+            Assert.NotNull(document);
+
+            using var downloadRequest = CreateAuthorizedRequest(
+                HttpMethod.Get,
+                $"/api/documents/{document.Id}/content",
+                owner);
+            using var download = await _client.SendAsync(downloadRequest);
+            Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+            Assert.Equal(bytes, await download.Content.ReadAsByteArrayAsync());
+            Assert.Equal(fileName, download.Content.Headers.ContentDisposition?.FileNameStar
+                ?? download.Content.Headers.ContentDisposition?.FileName?.Trim('"'));
+
+            var expectedContentType = Path.GetExtension(fileName).ToLowerInvariant() switch
+            {
+                ".txt" => "text/plain",
+                ".doc" => "application/msword",
+                ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                _ => throw new InvalidOperationException("Unexpected test document extension.")
+            };
+            Assert.Equal(expectedContentType, download.Content.Headers.ContentType?.MediaType);
+        }
+    }
+
+    [Fact]
+    public async Task Owner_can_edit_text_and_word_documents_and_previous_versions_are_preserved()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var originalText = Encoding.UTF8.GetBytes("First line\nSecond line");
+        using var textUpload = await UploadFileAsync(owner.AccessToken, "notes.txt", originalText);
+        var textDocument = await textUpload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(textDocument);
+
+        using var textReadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{textDocument.Id}/editable-text",
+            owner);
+        using var textRead = await _client.SendAsync(textReadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, textRead.StatusCode);
+        var editableText = await textRead.Content.ReadFromJsonAsync<DocumentEditableTextResponse>();
+        Assert.NotNull(editableText);
+        Assert.Equal("First line\nSecond line", editableText.Text);
+
+        using var textUpdateRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{textDocument.Id}/editable-text",
+            owner,
+            JsonContent.Create(new { text = "Updated text" }));
+        using var textUpdate = await _client.SendAsync(textUpdateRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, textUpdate.StatusCode);
+
+        using var textDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{textDocument.Id}/content",
+            owner);
+        using var textDownload = await _client.SendAsync(textDownloadRequest);
+        Assert.Equal("Updated text", await textDownload.Content.ReadAsStringAsync());
+
+        using var textVersionRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{textDocument.Id}/versions/1/content",
+            owner);
+        using var textVersion = await _client.SendAsync(textVersionRequest);
+        Assert.Equal(originalText, await textVersion.Content.ReadAsByteArrayAsync());
+
+        var docxBytes = CreateDocxBytesForTest("Original Word text");
+        using var wordUpload = await UploadFileAsync(owner.AccessToken, "report.docx", docxBytes);
+        var wordDocument = await wordUpload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(wordDocument);
+
+        var reader = await RegisterAndGetSessionAsync();
+        using var wordReaderGrantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{wordDocument.Id}/grants",
+            owner,
+            JsonContent.Create(new { email = reader.Email, permission = "READ" }));
+        using var wordReaderGrant = await _client.SendAsync(wordReaderGrantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, wordReaderGrant.StatusCode);
+
+        using var deniedTextReadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{wordDocument.Id}/editable-text",
+            reader);
+        using var deniedTextRead = await _client.SendAsync(deniedTextReadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, deniedTextRead.StatusCode);
+
+        using var deniedTextUpdateRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{wordDocument.Id}/editable-text",
+            reader,
+            JsonContent.Create(new { text = "Should not be saved" }));
+        using var deniedTextUpdate = await _client.SendAsync(deniedTextUpdateRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, deniedTextUpdate.StatusCode);
+
+        using var wordReadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{wordDocument.Id}/editable-text",
+            owner);
+        using var wordRead = await _client.SendAsync(wordReadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, wordRead.StatusCode);
+        var wordText = await wordRead.Content.ReadFromJsonAsync<DocumentEditableTextResponse>();
+        Assert.NotNull(wordText);
+        Assert.Contains("Original Word text", wordText.Text);
+
+        using var wordUpdateRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{wordDocument.Id}/editable-text",
+            owner,
+            JsonContent.Create(new { text = "Edited Word text" }));
+        using var wordUpdate = await _client.SendAsync(wordUpdateRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, wordUpdate.StatusCode);
+        var updatedWord = await wordUpdate.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(updatedWord);
+        Assert.Equal("report.docx", updatedWord.OriginalFileName);
+
+        using var wordDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{wordDocument.Id}/content",
+            owner);
+        using var wordDownload = await _client.SendAsync(wordDownloadRequest);
+        var savedDocxBytes = await wordDownload.Content.ReadAsByteArrayAsync();
+        using var savedDocxStream = new MemoryStream(savedDocxBytes);
+        Assert.Equal(
+            "Edited Word text",
+            await new ApiFactory.TestDocumentTextConverter().ExtractTextAsync(
+                savedDocxStream,
+                ".docx",
+                CancellationToken.None));
+
+        using var wordVersionRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{wordDocument.Id}/versions/1/content",
+            owner);
+        using var wordVersion = await _client.SendAsync(wordVersionRequest);
+        var originalDocx = await wordVersion.Content.ReadAsByteArrayAsync();
+        using var originalDocxStream = new MemoryStream(originalDocx);
+        Assert.Contains(
+            "Original Word text",
+            await new ApiFactory.TestDocumentTextConverter().ExtractTextAsync(
+                originalDocxStream,
+                ".docx",
+                CancellationToken.None));
+
+        var legacyWordBytes = new byte[]
+        {
+            0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00
+        };
+        using var legacyUpload = await UploadFileAsync(
+            owner.AccessToken,
+            "legacy-report.doc",
+            legacyWordBytes);
+        var legacyDocument = await legacyUpload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(legacyDocument);
+
+        using var legacyUpdateRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{legacyDocument.Id}/editable-text",
+            owner,
+            JsonContent.Create(new { text = "Edited legacy Word text" }));
+        using var legacyUpdate = await _client.SendAsync(legacyUpdateRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, legacyUpdate.StatusCode);
+        var convertedLegacyDocument =
+            await legacyUpdate.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(convertedLegacyDocument);
+        Assert.Equal("legacy-report.docx", convertedLegacyDocument.OriginalFileName);
+
+        using var legacyVersionRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{legacyDocument.Id}/versions/1/content",
+            owner);
+        using var legacyVersion = await _client.SendAsync(legacyVersionRequest);
+        Assert.Equal(legacyWordBytes, await legacyVersion.Content.ReadAsByteArrayAsync());
+    }
+
     [Theory]
-    [InlineData("report.txt", "%PDF-1.7\nsample")]
+    [InlineData("report.exe", "%PDF-1.7\nsample")]
     [InlineData("report.pdf", "not a PDF")]
+    [InlineData("report.docx", "not a Word document")]
+    [InlineData("report.doc", "not a Word document")]
     public async Task Upload_rejects_files_with_an_invalid_extension_or_signature(
         string fileName,
         string contents)
@@ -551,6 +924,40 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     private static readonly byte[] PdfBytes = Encoding.ASCII.GetBytes(
         "%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF");
 
+    internal static byte[] CreateDocxBytesForTest(string text = "")
+    {
+        using var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using (var contentTypes = new StreamWriter(
+                archive.CreateEntry("[Content_Types].xml").Open()))
+            {
+                contentTypes.Write(
+                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>");
+            }
+
+            using (var relationships = new StreamWriter(
+                archive.CreateEntry("_rels/.rels").Open()))
+            {
+                relationships.Write(
+                    "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>");
+            }
+
+            using (var document = new StreamWriter(
+                archive.CreateEntry("word/document.xml").Open()))
+            {
+                var paragraphs = string.Join(
+                    string.Empty,
+                    text.Split('\n').Select(line =>
+                        $"<w:p><w:r><w:t>{SecurityElement.Escape(line)}</w:t></w:r></w:p>"));
+                document.Write(
+                    $"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{paragraphs}<w:sectPr/></w:body></w:document>");
+            }
+        }
+
+        return stream.ToArray();
+    }
+
     private async Task<AuthResponse> RegisterAndGetSessionAsync()
     {
         using var response = await RegisterAsync(NewEmail());
@@ -565,6 +972,19 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
 
     private Task<HttpResponseMessage> UploadPdfAsync(string accessToken) =>
         UploadFileAsync(accessToken, "report.pdf", PdfBytes);
+
+    private static MultipartFormDataContent CreatePdfContent(
+        string fileName,
+        byte[] bytes,
+        bool purgePreviousVersions = false)
+    {
+        var content = new MultipartFormDataContent();
+        content.Add(new ByteArrayContent(bytes), "file", fileName);
+        content.Add(
+            new StringContent(purgePreviousVersions.ToString()),
+            "purgePreviousVersions");
+        return content;
+    }
 
     private async Task<HttpResponseMessage> UploadFileAsync(
         string accessToken,
@@ -689,6 +1109,16 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         }
     }
 
+    protected override void ConfigureWebHost(
+        Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
+    {
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IDocumentTextConverter>();
+            services.AddSingleton<IDocumentTextConverter, ApiFactory.TestDocumentTextConverter>();
+        });
+    }
+
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
@@ -701,5 +1131,36 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             Directory.Delete(_storageRoot, recursive: true);
         }
+    }
+
+    public sealed class TestDocumentTextConverter : IDocumentTextConverter
+    {
+        public async Task<string> ExtractTextAsync(
+            Stream content,
+            string extension,
+            CancellationToken cancellationToken)
+        {
+            if (extension.Equals(".doc", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Original Word text";
+            }
+
+            using var archive = new ZipArchive(content, ZipArchiveMode.Read, leaveOpen: true);
+            var documentEntry = archive.GetEntry("word/document.xml")
+                ?? throw new InvalidDataException("Test DOCX has no document part.");
+            await using var documentStream = documentEntry.Open();
+            var document = await XDocument.LoadAsync(
+                documentStream,
+                LoadOptions.None,
+                cancellationToken);
+            XNamespace wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            return string.Join(
+                Environment.NewLine,
+                document.Descendants(wordNamespace + "p").Select(paragraph =>
+                    string.Concat(paragraph.Descendants(wordNamespace + "t").Select(node => node.Value))));
+        }
+
+        public Task<byte[]> CreateDocxAsync(string text, CancellationToken cancellationToken) =>
+            Task.FromResult(ApiAuthorizationTests.CreateDocxBytesForTest(text));
     }
 }

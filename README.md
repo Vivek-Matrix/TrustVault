@@ -1,8 +1,8 @@
 # TrustVault
 
-TrustVault is a document-sharing prototype. Sprint 1 authentication and the
-Sprint 2 owner-only document lifecycle are implemented. Named-user READ/EDIT
-grants, active-grant listing, and revocation are now implemented locally.
+TrustVault is a local document-sharing prototype. It supports authentication,
+private PDF/TXT/DOC/DOCX upload/download, named-user READ/EDIT sharing, document
+editing, version history, and audit-chain verification. It is not production-ready.
 Refresh-token issuance and production deployment are not implemented.
 
 ## Architecture
@@ -56,7 +56,7 @@ See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 From the repository root in PowerShell:
 
 ```powershell
-docker compose up -d --force-recreate postgres
+docker compose up -d --build --force-recreate postgres converter converter-dev-proxy
 $env:ConnectionStrings__TrustVault = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only"
 $keyBytes = New-Object byte[] 32
 $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
@@ -66,6 +66,7 @@ $env:Jwt__SigningKey = [Convert]::ToBase64String($keyBytes)
 $env:Jwt__Issuer = "TrustVault"
 $env:Jwt__Audience = "TrustVault"
 $env:Frontend__Origin = "http://localhost:4200"
+$env:DocumentConversion__Endpoint = "http://localhost:6100/"
 # Optional: documents are stored outside wwwroot at this path by default.
 # $env:Storage__RootPath = "C:\TrustVaultData\documents"
 dotnet tool restore
@@ -89,14 +90,26 @@ configurable to 5-30 minutes with `Jwt:AccessTokenLifetimeMinutes`. The Angular
 client keeps the token in memory only, so closing or reloading the page signs
 the user out. The development API documentation is at `/swagger`.
 
-After signing in, the Angular screen lets you upload, list, refresh, and
-download PDFs. Owners can grant READ or EDIT permission to another existing
-account and revoke an active grant. Both permissions currently allow reading
-and downloading; document editing is not implemented. Uploads are limited to
-10 MiB. The server checks the file extension and `%PDF-` signature, then stores
-it under an opaque generated key outside the static web root. The current
-filesystem provider is for local development only. Use dummy files, not
-confidential documents.
+After signing in, the Angular screen lets you upload, list, refresh, and download
+PDF, TXT, DOC, and DOCX files. TXT documents can be edited directly. Word
+documents use the isolated LibreOffice converter service; Word editing keeps
+text but does not preserve formatting, images, tables, or other embedded
+content. Saving a legacy `.doc` produces `.docx`; the original is kept in
+previous versions. The in-app page editor and PDF replacement are available
+for PDFs. Owners can grant READ or EDIT access to another
+existing account and revoke an active grant. READ permits viewing and download;
+EDIT also permits changing title/details, editing TXT/Word text, editing PDF
+pages, and replacing a PDF.
+Uploads are limited to 10 MiB. The server validates the extension and
+format-specific signature or structure, then stores files under an opaque
+generated key outside the static web root. TXT files must use UTF-8 or Unicode
+with a byte-order mark. The current filesystem provider is for local development
+only. Use dummy files, not confidential documents.
+
+For local development, the API reaches the converter through a resource-limited
+Nginx relay bound to `127.0.0.1:6100`. The converter itself has no published
+host port and remains on an internal Docker network; the relay is not intended
+for production.
 
 ### Try the document screen
 
@@ -104,9 +117,11 @@ confidential documents.
 2. In a second PowerShell window, run `Set-Location frontend` and then
    `npm start`.
 3. Open `http://localhost:4200`, create an account, and sign in.
-4. In **Documents**, enter a title/category, choose a small dummy PDF, and
-   select **Upload PDF**. The uploaded file appears in your list; use
-   **Download** to save it.
+4. In **Documents**, enter a title/category, choose a small dummy PDF, TXT,
+   DOC, or DOCX file, and select **Upload file**. The uploaded file appears in
+   your list; use **Download** to save it. Choose **Edit** to edit TXT or Word
+   text, or to open the page editor for a PDF. The converter service must be
+   running to edit Word files.
 5. Sign out, create a second test account, and confirm its document list is
    empty. Automated API tests separately verify that a different account
    cannot retrieve another owner's document, even with its ID.
@@ -120,6 +135,16 @@ confidential documents.
    the second account and confirm. Sign back in as that account and refresh:
    the document should no longer be listed. The API integration tests also
    verify that revoked access to its old document ID returns 404.
+9. Repeat the sharing steps, this time choosing **Edit**. Sign in as the second
+   account and choose **Edit** on the shared document. Try saving a new title,
+   edit and save a TXT or Word text file, then use a disposable PDF to add text,
+   draw, replace an area, reorder/remove a page, and select **Save edited PDF**.
+   Replace the PDF with a different dummy PDF and verify the previous file is
+   available under **Previous versions**.
+10. Use a disposable PDF with non-sensitive sample text to test **Redact area**.
+    Save the result, download it, and verify the covered area is black and the
+    old file no longer appears in **Previous versions**. Do not treat this as
+    secure deletion from backups or already-downloaded copies.
 
 Do not use real confidential files. The browser keeps the access token only in
 memory; refreshing or closing the page signs the user out. Use separate
@@ -180,10 +205,17 @@ in-memory per-IP rate limit. Document metadata and downloads are available to
 the owner or a user with an active named grant; the server checks grant state
 on each request, so revocation takes effect immediately. Unauthorized users
 receive 404. Upload, list, metadata, download, grant, revoke, and denied access
-events are recorded using a serialized hash chain. The chain is not verified or
-protected from a privileged database operator, so it is not tamper-proof. EDIT
-grants currently provide the same read/download access as READ; editing is not
-implemented. Complete PDF validation/malware scanning, refresh tokens, email
+events are recorded using a serialized hash chain. The migrator can verify the
+hashes and links among stored events with
+`dotnet run --project backend\TrustVault.Migrator -- --verify-audit`. This
+detects changed records and broken links, but cannot detect tail deletion or a
+complete rewrite without external anchoring. The chain is not tamper-proof.
+EDIT users can update details and use the in-app PDF editor to add text/draw,
+replace text areas, redact, reorder/remove pages, or replace the PDF. Page edits
+are flattened to images, so text search, links, forms, signatures, and
+accessibility features are lost. Redaction clears app-accessible previous
+versions but cannot erase external backups or copies already downloaded.
+Complete PDF validation/malware scanning, refresh tokens, email
 verification, password recovery, user suspension management, production
 storage, and a restricted production DB role remain follow-up work. An endpoint
 is not secure merely because its UI is hidden.

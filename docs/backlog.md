@@ -58,10 +58,10 @@ short-lived.
 **Implemented local slices of TV-004, TV-006, and TV-007**
 
 Implementation includes authenticated upload/list/metadata/download endpoints,
-a local private-filesystem provider, PDF extension/signature/size checks,
+a local private-filesystem provider, PDF/TXT/DOC/DOCX format and size checks,
 owner/active-grant authorization, and serialized hash-chained audit writes.
 Named-user READ/EDIT grants can be managed by the owner; active grants are
-checked on each list/metadata/download request, and revocation is immediate.
+checked on each list/metadata/download/edit request, and revocation is immediate.
 Integration tests cover owner success, anonymous denial, cross-user denial,
 invalid uploads, size limits, shared listing/download, grant management, and
 revocation. The Angular screen supports upload/list/download and grant
@@ -71,26 +71,25 @@ or real documents are involved.
 - Implemented authenticated upload, owner/shared listing, and download
   endpoints. Ownership comes from the authenticated identity; requests cannot
   supply an owner, filesystem path, or storage key.
-- Validated size and PDF extension/signature before storage. Opaque keys keep
+- Validated size and supported file formats before storage. Opaque keys keep
   files private, and no public or reusable storage URL is returned.
 - Enforced ownership or active-grant checks on each list, metadata, and
   download request, including requests using guessed IDs.
-- Recorded successful upload/download and denied cross-user access. Hash-chain
-  verification, external anchoring, and restricted production database roles
-  remain necessary before describing audit evidence as tamper-proof.
+- Recorded successful upload/download and denied cross-user access. Sprint 3
+  added local verification of stored hash-chain records; external anchoring and
+  restricted production database roles remain necessary before describing
+  audit evidence as tamper-proof.
 - Added API integration tests for owner success, anonymous denial, cross-user
   metadata/download denial, invalid or oversized uploads, and audit outcomes.
   Updated API, threat, architecture, and local setup documentation.
 - Added an authenticated Angular screen for upload, listing, refresh, download,
   and permission management with loading/error states.
-- Verified: all 32 backend tests, .NET formatting verification, frontend lint,
-  all 13 frontend tests, and the production build pass. Owner-guided manual
+- Verified: all 43 backend tests, frontend lint, all 14 frontend tests, and the
+  production build pass. Owner-guided manual
   verification remains.
 
-**Still out of scope:** document editing and deletion, refresh-token rotation,
-malware scanning, AWS provisioning, and production deployment. `EDIT` grants
-currently provide the same read/download access as `READ`; editing is not
-implemented. Keep storage behind a private
+**Still out of scope:** document deletion, refresh-token rotation, malware
+scanning, AWS provisioning, and production deployment. Keep storage behind a private
 provider boundary; choose and validate the production AWS storage service only
 after deployment prerequisites and cost are confirmed. The current local
 development storage must not be presented as production-ready.
@@ -101,10 +100,43 @@ retrievable document; permitted and denied attempts are represented in audit
 records; no secrets or real confidential files are used in tests; and docs
 accurately state remaining audit-integrity and deployment gaps.
 
-**Next slices:** TV-009 for audit-chain verification, external protection, and
-a restricted runtime database role; TV-003a for refresh-token lifecycle.
-Revisit ordering if estimates change while retaining per-request authorization
-and cross-user denial tests as security gates.
+**Next slices:** external audit protection and a restricted runtime database
+role from TV-009; TV-003a for refresh-token lifecycle. Revisit ordering if
+estimates change while retaining per-request authorization and cross-user
+denial tests as security gates.
+
+### Sprint 3: permission clarity and audit-chain verification
+
+**Goal:** Add a local check for altered or disconnected audit records without
+claiming protection from a privileged database operator.
+
+- Edit grants were subsequently implemented with server-side authorization
+  for metadata updates and PDF replacement/page editing. READ remains
+  read-only.
+- `dotnet run --project backend\TrustVault.Migrator -- --verify-audit` checks
+  record hashes and previous-hash links in timestamp order without migrating or
+  changing the database.
+- Automated tests cover valid chains, altered event content, incorrect hashes,
+  broken links, and a missing middle event. API tests cover grant changes,
+  edit authorization, content replacement, version access, and redaction
+  version purging.
+- Tail deletion and a complete chain rewrite remain undetectable without an
+  independently protected external anchor. Production runtime-role separation,
+  external anchoring, and deployment remain future work.
+
+### EDIT feature follow-up
+
+EDIT grants now allow users to update document details, replace the current
+PDF, or edit pages in the browser. TXT files support direct text editing;
+DOC/DOCX text editing uses a separate restricted LibreOffice converter and
+saves a simplified DOCX without preserving formatting or embedded media.
+Previous source files remain available as versions. The PDF editor supports text overlays, drawing,
+visual text replacement, black redaction, page reordering, and page removal.
+Edited pages are rasterized and stored as images inside a PDF. Redaction removes
+prior-version API records and attempts to delete those files; it cannot erase
+offline copies or guarantee removal from filesystem-level backups. Review every
+edited output and use test documents until production storage and redaction
+handling have been independently assessed.
 
 | ID | Story | Points |
 |---|---|---:|

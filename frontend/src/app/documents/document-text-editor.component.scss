@@ -1,0 +1,145 @@
+:host {
+  position: fixed;
+  z-index: 21;
+  inset: 0;
+  display: block;
+}
+
+.text-editor-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 1rem;
+  background: #101b2bcc;
+}
+
+.text-editor-dialog {
+  box-sizing: border-box;
+  max-width: 64rem;
+  min-height: calc(100vh - 2rem);
+  margin: 0 auto;
+  padding: clamp(1rem, 3vw, 2rem);
+  border-radius: 1rem;
+  background: #fff;
+  color: #172033;
+}
+
+.text-editor-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.3rem;
+  color: #387c70;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+h2,
+h3 {
+  margin: 0;
+  color: #183b67;
+}
+
+.file-name,
+.editor-hint {
+  color: #657187;
+}
+
+label {
+  display: block;
+  margin: 1rem 0 0.4rem;
+  font-weight: 600;
+}
+
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 55vh;
+  padding: 0.8rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.5rem;
+  color: #172033;
+  font: 0.95rem/1.5 Consolas, monospace;
+  resize: vertical;
+}
+
+.primary-button,
+.secondary-button {
+  min-height: 2.5rem;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.45rem;
+  background: #f5f7fb;
+  color: #183b67;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.primary-button {
+  margin-top: 0.75rem;
+  border: 0;
+  background: #183b67;
+  color: #fff;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.conversion-warning {
+  margin: 1rem 0;
+  padding: 0.8rem;
+  border-left: 4px solid #b36a12;
+  background: #fff6e8;
+  line-height: 1.5;
+}
+
+.previous-versions {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e1e7ef;
+}
+
+.previous-versions ul {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.previous-versions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.editor-error,
+.editor-message {
+  padding: 0.65rem;
+  border-radius: 0.4rem;
+}
+
+.editor-error {
+  background: #fff0f0;
+  color: #a32626;
+}
+
+.editor-message {
+  background: #edf8f3;
+  color: #24644b;
+}
+
+@media (max-width: 36rem) {
+  .previous-versions li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

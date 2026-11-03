@@ -1,6 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using TrustVault.Domain.Audit;
@@ -66,7 +63,7 @@ public sealed class DocumentAuditWriter(ApplicationDbContext database)
                 MetadataJson = metadataJson,
                 PreviousHash = previous?.RecordHash
             };
-            auditEvent.RecordHash = CalculateHash(auditEvent);
+            auditEvent.RecordHash = AuditEventHash.Calculate(auditEvent);
             database.AuditEvents.Add(auditEvent);
             await database.SaveChangesAsync(cancellationToken);
 
@@ -93,26 +90,6 @@ public sealed class DocumentAuditWriter(ApplicationDbContext database)
         }
     }
 
-    private static string CalculateHash(AuditEvent auditEvent)
-    {
-        var canonicalRecord = JsonSerializer.Serialize(new
-        {
-            auditEvent.Id,
-            auditEvent.ActorUserId,
-            auditEvent.ActorRole,
-            auditEvent.DocumentId,
-            auditEvent.Action,
-            auditEvent.Result,
-            auditEvent.TimestampUtc,
-            auditEvent.RequestId,
-            auditEvent.IpAddress,
-            auditEvent.UserAgent,
-            auditEvent.MetadataJson,
-            auditEvent.PreviousHash
-        });
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalRecord)))
-            .ToLowerInvariant();
-    }
 }
 
 internal static class AuditStringExtensions

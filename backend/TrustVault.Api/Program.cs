@@ -44,6 +44,8 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 builder.Services.AddScoped<DocumentAuditWriter>();
+builder.Services.AddHttpClient<IDocumentTextConverter, DocumentTextConverterClient>(
+    client => client.Timeout = TimeSpan.FromSeconds(45));
 var documentStorageRoot = builder.Configuration["Storage:RootPath"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data", "documents");
 var authenticationRateLimit = builder.Configuration.GetValue(

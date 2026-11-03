@@ -14,6 +14,10 @@ services by following earlier copies of this plan.
 
 - The root Dockerfile packages the Angular frontend and ASP.NET Core API into a
   single container image.
+- Word document editing uses a separate LibreOffice converter image. The
+  converter must run as a non-root service on a private network, without
+  database credentials or document-storage mounts, and with strict CPU,
+  memory, process, and temporary-storage limits.
 - GitHub Actions builds and tests the project and builds the container image.
   It does not publish the image to a registry or deploy it to AWS.
 - The backend uses PostgreSQL. AWS database selection and network design have
@@ -87,8 +91,9 @@ only on the separate generated local server.
    that a service is free or enabled.
 3. Design an AWS deployment that supports the existing .NET Docker container and
    PostgreSQL. Include container hosting, image storage, database, networking,
-   secrets, logs, health checks, and a controlled migration step. Review the
-   complete expected cost before provisioning.
+   secrets, logs, health checks, a private isolated Word-converter service, and
+   a controlled migration step. Review the complete expected cost before
+   provisioning.
 4. Do not put database credentials, signing keys, or AWS credentials in Git,
    Docker build arguments, frontend files, or chat. Use an AWS secret-management
    service if a deployment is approved.
@@ -104,6 +109,10 @@ before marking internet deployment complete:
 - CI builds, tests, and publishes the exact commit intended for deployment.
 - The deployed service runs in `ap-southeast-2` and serves the Angular app and
   API over HTTPS.
+- The Word-converter service is not publicly reachable, has no database
+  credentials or document-storage access, is connected to the API only over a
+  private network, and is constrained by container resource limits. Do not
+  deploy the loopback-only local development relay.
 - Database credentials are stored outside the image and source repository; the
   controlled EF migrator succeeds before the API release starts.
 - The configured health check returns success, and service logs show no startup

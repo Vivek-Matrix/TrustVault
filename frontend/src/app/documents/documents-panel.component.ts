@@ -7,12 +7,14 @@ import {
   DocumentItem,
   DocumentService,
 } from './document.service';
+import { DocumentEditorComponent } from './document-editor.component';
+import { DocumentTextEditorComponent } from './document-text-editor.component';
 
 const maximumFileBytes = 10 * 1024 * 1024;
 
 @Component({
   selector: 'app-documents-panel',
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, DocumentEditorComponent, DocumentTextEditorComponent],
   template: `
     <section class="documents-card" aria-labelledby="documents-heading">
       <div class="section-heading">
@@ -30,8 +32,8 @@ const maximumFileBytes = 10 * 1024 * 1024;
       </div>
 
       <p class="intro">
-        Upload a PDF, share it with an existing user, or download a file shared with you.
-        Files are limited to 10 MiB.
+        Upload PDF, TXT, DOC, or DOCX files, share them with an existing user, or download files
+        shared with you. Files are limited to 10 MiB.
         Use test files only; this local storage is not for confidential documents.
       </p>
 
@@ -55,23 +57,23 @@ const maximumFileBytes = 10 * 1024 * 1024;
           <span class="field-error">Enter a category.</span>
         }
 
-        <label for="document-file">PDF file</label>
+        <label for="document-file">Document file</label>
         <input
           id="document-file"
           type="file"
-          accept=".pdf,application/pdf"
+          accept=".pdf,.txt,.doc,.docx"
           (change)="onFileSelected($event)" />
         @if (selectedFile(); as file) {
           <span class="field-hint">Selected: {{ file.name }} ({{ formatSize(file.size) }})</span>
         } @else {
-          <span class="field-hint">Choose a PDF file up to 10 MiB.</span>
+          <span class="field-hint">Choose a PDF, TXT, DOC, or DOCX file up to 10 MiB.</span>
         }
 
         <button
           class="primary-button"
           type="submit"
           [disabled]="form.invalid || !selectedFile() || uploading()">
-          {{ uploading() ? 'Uploading...' : 'Upload PDF' }}
+          {{ uploading() ? 'Uploading...' : 'Upload file' }}
         </button>
       </form>
 
@@ -83,7 +85,7 @@ const maximumFileBytes = 10 * 1024 * 1024;
       @if (loading() && documents().length === 0) {
         <p class="empty-state">Loading your documents...</p>
       } @else if (documents().length === 0) {
-        <p class="empty-state">No documents yet. Upload a test PDF to get started.</p>
+        <p class="empty-state">No documents yet. Upload a test file to get started.</p>
       } @else {
         <ul class="document-list">
           @for (item of documents(); track item.id) {
@@ -92,24 +94,34 @@ const maximumFileBytes = 10 * 1024 * 1024;
                 <strong>{{ item.title }}</strong>
                 <span>{{ item.originalFileName }} · {{ item.category }} · {{ formatSize(item.sizeBytes) }}</span>
               </div>
-              <button
-                class="secondary-button download-button"
-                type="button"
-                [disabled]="downloadingId() === item.id"
-                (click)="downloadDocument(item)">
-                {{ downloadingId() === item.id ? 'Downloading...' : 'Download' }}
-              </button>
-              @if (item.isOwner) {
+              <div class="document-actions">
                 <button
-                  class="secondary-button access-button"
+                  class="secondary-button download-button"
                   type="button"
-                  [attr.aria-expanded]="selectedShareDocumentId() === item.id"
-                  (click)="toggleAccess(item.id)">
-                  {{ selectedShareDocumentId() === item.id ? 'Close access' : 'Manage access' }}
+                  [disabled]="downloadingId() === item.id"
+                  (click)="downloadDocument(item)">
+                  {{ downloadingId() === item.id ? 'Downloading...' : 'Download' }}
                 </button>
-              } @else {
-                <span class="permission-badge">{{ item.permission }} access</span>
-              }
+                @if (canEdit(item)) {
+                  <button
+                    class="secondary-button edit-button"
+                    type="button"
+                    (click)="openEditor(item)">
+                    Edit
+                  </button>
+                }
+                @if (item.isOwner) {
+                  <button
+                    class="secondary-button access-button"
+                    type="button"
+                    [attr.aria-expanded]="selectedShareDocumentId() === item.id"
+                    (click)="toggleAccess(item.id)">
+                    {{ selectedShareDocumentId() === item.id ? 'Close access' : 'Manage access' }}
+                  </button>
+                } @else {
+                  <span class="permission-badge">{{ item.permission }} access</span>
+                }
+              </div>
             </li>
             @if (item.isOwner && selectedShareDocumentId() === item.id) {
               <li class="access-panel">
@@ -145,12 +157,9 @@ const maximumFileBytes = 10 * 1024 * 1024;
                     required />
                   <label [for]="'share-permission-' + item.id">Permission</label>
                   <select [id]="'share-permission-' + item.id" name="permission">
-                    <option value="READ">Read</option>
-                    <option value="EDIT">Edit</option>
+                    <option value="READ">Read-only</option>
+                    <option value="EDIT">Can edit</option>
                   </select>
-                  <span class="field-hint">
-                    Edit permission is recorded for the future editing workflow; editing is not available yet.
-                  </span>
                   <button
                     class="primary-button"
                     type="submit"
@@ -164,6 +173,21 @@ const maximumFileBytes = 10 * 1024 * 1024;
         </ul>
       }
     </section>
+    @if (editingDocument(); as item) {
+      @if (isPdf(item)) {
+        @defer (when editingDocument() !== null) {
+          <app-document-editor
+            [item]="item"
+            (closed)="closeEditor()"
+            (saved)="onDocumentSaved($event)" />
+        }
+      } @else {
+        <app-document-text-editor
+          [item]="item"
+          (closed)="closeEditor()"
+          (saved)="onDocumentSaved($event)" />
+      }
+    }
   `,
   styleUrl: './documents-panel.component.scss',
 })
@@ -172,6 +196,7 @@ export class DocumentsPanelComponent {
   private readonly documentService = inject(DocumentService);
 
   readonly documents = signal<DocumentItem[]>([]);
+  readonly editingDocument = signal<DocumentItem | null>(null);
   readonly selectedFile = signal<File | null>(null);
   readonly loading = signal(false);
   readonly uploading = signal(false);
@@ -203,14 +228,14 @@ export class DocumentsPanelComponent {
       return;
     }
 
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      this.error.set('Choose a PDF file.');
+    if (!/\.(pdf|txt|doc|docx)$/i.test(file.name)) {
+      this.error.set('Choose a PDF, TXT, DOC, or DOCX file.');
       input.value = '';
       return;
     }
 
     if (file.size === 0 || file.size > maximumFileBytes) {
-      this.error.set('The PDF must be between 1 byte and 10 MiB.');
+      this.error.set('The file must be between 1 byte and 10 MiB.');
       input.value = '';
       return;
     }
@@ -256,9 +281,9 @@ export class DocumentsPanelComponent {
           if (fileInput instanceof HTMLInputElement) {
             fileInput.value = '';
           }
-          this.message.set('Your PDF was uploaded.');
+          this.message.set(`${file.name} was uploaded.`);
         },
-        error: (error: unknown) => this.error.set(this.describeError(error, 'upload this PDF')),
+        error: (error: unknown) => this.error.set(this.describeError(error, 'upload this file')),
       });
   }
 
@@ -283,7 +308,7 @@ export class DocumentsPanelComponent {
           URL.revokeObjectURL(url);
           this.message.set(`Downloaded ${item.originalFileName}.`);
         },
-        error: (error: unknown) => this.error.set(this.describeError(error, 'download this PDF')),
+        error: (error: unknown) => this.error.set(this.describeError(error, 'download this file')),
       });
   }
 
@@ -296,6 +321,35 @@ export class DocumentsPanelComponent {
 
     this.selectedShareDocumentId.set(documentId);
     this.loadGrants(documentId);
+  }
+
+  canEdit(item: DocumentItem): boolean {
+    return item.isOwner || item.permission === 'EDIT';
+  }
+
+  isPdf(item: DocumentItem): boolean {
+    return item.originalFileName.toLowerCase().endsWith('.pdf');
+  }
+
+  openEditor(item: DocumentItem): void {
+    if (this.canEdit(item)) {
+      this.editingDocument.set(item);
+      this.error.set(null);
+      this.message.set(null);
+    }
+  }
+
+  closeEditor(): void {
+    this.editingDocument.set(null);
+  }
+
+  onDocumentSaved(updated: DocumentItem): void {
+    this.documents.update((documents) =>
+      documents.map((item) => (item.id === updated.id ? updated : item)),
+    );
+    this.editingDocument.set(updated);
+    this.message.set('Document changes were saved.');
+    this.refreshDocuments();
   }
 
   grantAccess(documentId: string, event: Event): void {
@@ -312,7 +366,7 @@ export class DocumentsPanelComponent {
       typeof email !== 'string' ||
       (permission !== 'READ' && permission !== 'EDIT')
     ) {
-      this.error.set('Enter an email and choose READ or EDIT access.');
+      this.error.set('Enter an email and choose Read or Edit access.');
       return;
     }
 

@@ -1,6 +1,9 @@
+using System.IO.Compression;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
+using System.Xml;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TrustVault.Api.Models.Documents;
@@ -19,10 +22,149 @@ public sealed class DocumentsController(
     ApplicationDbContext database,
     IPrivateDocumentStorage storage,
     DocumentAuditWriter auditWriter,
-    ILogger<DocumentsController> logger) : ControllerBase
+    ILogger<DocumentsController> logger,
+    IDocumentTextConverter textConverter) : ControllerBase
 {
     private const long MaximumFileBytes = 10 * 1024 * 1024;
     private const long MaximumRequestBytes = MaximumFileBytes + 64 * 1024;
+    private const int MaximumEditableTextCharacters = 2_000_000;
+
+    private static async Task<(string? ContentType, string? Error)> ValidateDocumentContentAsync(
+        string fileName,
+        Stream content,
+        CancellationToken cancellationToken)
+    {
+        var extension = Path.GetExtension(fileName);
+        if (!content.CanSeek)
+        {
+            throw new InvalidOperationException("The uploaded file stream must support seeking.");
+        }
+
+        content.Position = 0;
+        switch (extension.ToLowerInvariant())
+        {
+            case ".pdf":
+                if (!await HasSignatureAsync(content, "%PDF-"u8.ToArray(), cancellationToken))
+                {
+                    return (null, "The uploaded file does not have a valid PDF signature.");
+                }
+
+                return ("application/pdf", null);
+            case ".txt":
+                try
+                {
+                    using (var reader = new StreamReader(
+                        content,
+                        new UTF8Encoding(false, true),
+                        detectEncodingFromByteOrderMarks: true,
+                        leaveOpen: true))
+                    {
+                        var buffer = new char[4096];
+                        while (await reader.ReadAsync(buffer.AsMemory(), cancellationToken) > 0)
+                        {
+                        }
+                    }
+                }
+                catch (DecoderFallbackException)
+                {
+                    return (null, "Text files must use UTF-8 or a Unicode encoding with a byte-order mark.");
+                }
+
+                return ("text/plain; charset=utf-8", null);
+            case ".doc":
+                if (!await HasSignatureAsync(
+                    content,
+                    [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1],
+                    cancellationToken))
+                {
+                    return (null, "The uploaded file does not have a valid Word document signature.");
+                }
+
+                return ("application/msword", null);
+            case ".docx":
+                if (!IsValidDocxPackage(content))
+                {
+                    return (null, "The uploaded file is not a valid .docx Word document.");
+                }
+
+                return (
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    null);
+            default:
+                return (null, "Supported file types are PDF, TXT, DOC, and DOCX.");
+        }
+    }
+
+    private static async Task<bool> HasSignatureAsync(
+        Stream content,
+        byte[] expectedSignature,
+        CancellationToken cancellationToken)
+    {
+        var signature = new byte[expectedSignature.Length];
+        var signatureLength = 0;
+        while (signatureLength < signature.Length)
+        {
+            var bytesRead = await content.ReadAsync(
+                signature.AsMemory(signatureLength),
+                cancellationToken);
+            if (bytesRead == 0)
+            {
+                break;
+            }
+
+            signatureLength += bytesRead;
+        }
+
+        content.Position = 0;
+        return signatureLength == signature.Length
+            && signature.AsSpan().SequenceEqual(expectedSignature);
+    }
+
+    private static bool IsValidDocxPackage(Stream content)
+    {
+        try
+        {
+            using var archive = new ZipArchive(content, ZipArchiveMode.Read, leaveOpen: true);
+            var contentTypes = archive.GetEntry("[Content_Types].xml");
+            var document = archive.GetEntry("word/document.xml");
+            return contentTypes is not null
+                && document is not null
+                && HasXmlRoot(
+                    contentTypes,
+                    "Types",
+                    "http://schemas.openxmlformats.org/package/2006/content-types")
+                && HasXmlRoot(
+                    document,
+                    "document",
+                    "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or IOException or XmlException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasXmlRoot(ZipArchiveEntry entry, string localName, string namespaceUri)
+    {
+        using var entryStream = entry.Open();
+        using var reader = XmlReader.Create(
+            entryStream,
+            new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                MaxCharactersInDocument = MaximumFileBytes,
+                XmlResolver = null
+            });
+        var validRoot = reader.MoveToContent() == XmlNodeType.Element
+            && reader.LocalName == localName
+            && reader.NamespaceURI == namespaceUri;
+        while (reader.Read())
+        {
+        }
+
+        return validRoot;
+    }
 
     [HttpPost]
     [RequestSizeLimit(MaximumRequestBytes)]
@@ -43,32 +185,29 @@ public sealed class DocumentsController(
         {
             ModelState.AddModelError(
                 nameof(request.File),
-                $"The PDF must be between 1 byte and {MaximumFileBytes} bytes.");
+                $"The file must be between 1 byte and {MaximumFileBytes} bytes.");
             return ValidationProblem(ModelState);
         }
 
         var originalFileName = Path.GetFileName(file.FileName.Replace('\\', '/'));
         if (string.IsNullOrWhiteSpace(originalFileName)
             || originalFileName.Length > 255
-            || originalFileName.Any(char.IsControl)
-            || !string.Equals(
-                Path.GetExtension(originalFileName),
-                ".pdf",
-                StringComparison.OrdinalIgnoreCase))
+            || originalFileName.Any(char.IsControl))
         {
-            ModelState.AddModelError(nameof(request.File), "Only PDF files are accepted.");
+            ModelState.AddModelError(nameof(request.File), "The file name is invalid.");
             return ValidationProblem(ModelState);
         }
 
         await using var input = file.OpenReadStream();
-        var signature = new byte[5];
-        var signatureLength = await input.ReadAsync(signature, cancellationToken);
-        if (signatureLength != signature.Length
-            || !signature.AsSpan().SequenceEqual("%PDF-"u8))
+        var (contentType, validationError) = await ValidateDocumentContentAsync(
+            originalFileName,
+            input,
+            cancellationToken);
+        if (validationError is not null)
         {
             ModelState.AddModelError(
                 nameof(request.File),
-                "The uploaded file does not have a valid PDF signature.");
+                validationError);
             return ValidationProblem(ModelState);
         }
 
@@ -89,7 +228,7 @@ public sealed class DocumentsController(
                 : request.Description.Trim(),
             Category = request.Category.Trim(),
             OriginalFileName = originalFileName,
-            ContentType = "application/pdf",
+            ContentType = contentType!,
             SizeBytes = file.Length,
             StorageKey = Guid.NewGuid().ToString("N"),
             CreatedAtUtc = now,
@@ -469,6 +608,607 @@ public sealed class DocumentsController(
         return NoContent();
     }
 
+    [HttpPut("{id:guid}")]
+    [ProducesResponseType<DocumentResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<DocumentResponse>> UpdateMetadata(
+        Guid id,
+        UpdateDocumentRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        await using var transaction = await database.Database.BeginTransactionAsync(
+            cancellationToken);
+        await LockAuditChainAsync(cancellationToken);
+        var (document, permission) = await FindReadableDocumentAsync(
+            id,
+            userId,
+            cancellationToken);
+        if (document is null
+            || (document.OwnerId != userId && permission != DocumentPermission.Edit))
+        {
+            await RecordDeniedAccessAsync(id, "document.update", cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return NotFound();
+        }
+
+        var trackedDocument = await database.Documents
+            .FirstAsync(item => item.Id == id && !item.IsDeleted, cancellationToken);
+        trackedDocument.Title = request.Title.Trim();
+        trackedDocument.Description = string.IsNullOrWhiteSpace(request.Description)
+            ? null
+            : request.Description.Trim();
+        trackedDocument.Category = request.Category.Trim();
+        trackedDocument.UpdatedAtUtc = DateTime.UtcNow;
+        await auditWriter.WriteAsync(
+            HttpContext,
+            id,
+            "document.update",
+            AuditResult.Success,
+            JsonSerializer.Serialize(new { fields = new[] { "title", "description", "category" } }),
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return Ok(ToResponse(trackedDocument, document.OwnerId == userId, permission));
+    }
+
+    [HttpGet("{id:guid}/editable-text")]
+    [ProducesResponseType<DocumentEditableTextResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<DocumentEditableTextResponse>> GetEditableText(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var (document, permission) = await FindReadableDocumentAsync(id, userId, cancellationToken);
+        if (document is null
+            || (document.OwnerId != userId && permission != DocumentPermission.Edit)
+            || !IsTextEditableExtension(Path.GetExtension(document.OriginalFileName)))
+        {
+            await RecordDeniedAccessAsync(id, "document.text.read", cancellationToken);
+            return NotFound();
+        }
+
+        Stream content;
+        try
+        {
+            content = await storage.OpenReadAsync(document.StorageKey, cancellationToken);
+        }
+        catch (FileNotFoundException exception)
+        {
+            logger.LogError(exception, "Stored document {DocumentId} is missing.", id);
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Document storage is temporarily unavailable.");
+        }
+
+        string text;
+        await using (content)
+        {
+            var extension = Path.GetExtension(document.OriginalFileName);
+            if (string.Equals(extension, ".txt", StringComparison.OrdinalIgnoreCase))
+            {
+                using var reader = new StreamReader(
+                    content,
+                    new UTF8Encoding(false, true),
+                    detectEncodingFromByteOrderMarks: true,
+                    leaveOpen: true);
+                text = await reader.ReadToEndAsync(cancellationToken);
+            }
+            else
+            {
+                try
+                {
+                    text = await textConverter.ExtractTextAsync(
+                        content,
+                        extension,
+                        cancellationToken);
+                }
+                catch (DocumentConversionUnavailableException exception)
+                {
+                    logger.LogError(exception, "Word conversion is unavailable.");
+                    return Problem(
+                        statusCode: StatusCodes.Status503ServiceUnavailable,
+                        title: "Word editing is temporarily unavailable.",
+                        detail: exception.Message);
+                }
+                catch (DocumentConversionException exception)
+                {
+                    logger.LogWarning(exception, "Could not read Word document {DocumentId}.", id);
+                    return Problem(
+                        statusCode: StatusCodes.Status422UnprocessableEntity,
+                        title: "This Word file could not be converted for editing.",
+                        detail: exception.Message);
+                }
+            }
+        }
+
+        if (text.Length > MaximumEditableTextCharacters)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status413PayloadTooLarge,
+                title: "This document contains too much text to edit in the browser.");
+        }
+
+        await auditWriter.WriteAsync(
+            HttpContext,
+            id,
+            "document.text.read",
+            AuditResult.Success,
+            "{}",
+            cancellationToken);
+        return Ok(new DocumentEditableTextResponse(text));
+    }
+
+    [HttpPut("{id:guid}/editable-text")]
+    [RequestSizeLimit(MaximumRequestBytes)]
+    [ProducesResponseType<DocumentResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<DocumentResponse>> UpdateEditableText(
+        Guid id,
+        UpdateDocumentTextRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var (document, permission) = await FindReadableDocumentAsync(id, userId, cancellationToken);
+        if (document is null
+            || (document.OwnerId != userId && permission != DocumentPermission.Edit)
+            || !IsTextEditableExtension(Path.GetExtension(document.OriginalFileName)))
+        {
+            await RecordDeniedAccessAsync(id, "document.text.update", cancellationToken);
+            return NotFound();
+        }
+
+        if (request.Text is null)
+        {
+            ModelState.AddModelError(nameof(request.Text), "Text content is required.");
+            return ValidationProblem(ModelState);
+        }
+
+        if (request.Text.Length > MaximumEditableTextCharacters)
+        {
+            ModelState.AddModelError(
+                nameof(request.Text),
+                "The edited text is too long to save.");
+            return ValidationProblem(ModelState);
+        }
+
+        var sourceExtension = Path.GetExtension(document.OriginalFileName);
+        var isWordDocument = !string.Equals(
+            sourceExtension,
+            ".txt",
+            StringComparison.OrdinalIgnoreCase);
+        byte[] outputBytes;
+        if (isWordDocument)
+        {
+            try
+            {
+                outputBytes = await textConverter.CreateDocxAsync(
+                    request.Text,
+                    cancellationToken);
+            }
+            catch (DocumentConversionUnavailableException exception)
+            {
+                logger.LogError(exception, "Word conversion is unavailable.");
+                return Problem(
+                    statusCode: StatusCodes.Status503ServiceUnavailable,
+                    title: "Word editing is temporarily unavailable.",
+                    detail: exception.Message);
+            }
+            catch (DocumentConversionException exception)
+            {
+                logger.LogWarning(exception, "Could not create edited Word document {DocumentId}.", id);
+                return Problem(
+                    statusCode: StatusCodes.Status422UnprocessableEntity,
+                    title: "The edited text could not be converted to DOCX.",
+                    detail: exception.Message);
+            }
+        }
+        else
+        {
+            outputBytes = new UTF8Encoding(false).GetBytes(request.Text);
+        }
+        if (outputBytes.Length <= 0 || outputBytes.LongLength > MaximumFileBytes)
+        {
+            ModelState.AddModelError(
+                nameof(request.Text),
+                $"The edited file must be between 1 byte and {MaximumFileBytes} bytes.");
+            return ValidationProblem(ModelState);
+        }
+
+        var outputFileName = isWordDocument
+            ? $"{Path.GetFileNameWithoutExtension(document.OriginalFileName)}.docx"
+            : document.OriginalFileName;
+        var outputContentType = isWordDocument
+            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            : "text/plain; charset=utf-8";
+        var originalStorageKey = document.StorageKey;
+        var trackedDocument = await database.Documents
+            .FirstAsync(item => item.Id == id && !item.IsDeleted, cancellationToken);
+        var newStorageKey = Guid.NewGuid().ToString("N");
+        var stored = false;
+        var committed = false;
+
+        try
+        {
+            await using var outputStream = new MemoryStream(outputBytes, writable: false);
+            await storage.StoreAsync(newStorageKey, outputStream, cancellationToken);
+            stored = true;
+
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken);
+            await LockAuditChainAsync(cancellationToken);
+            var (latestDocument, latestPermission) = await FindReadableDocumentAsync(
+                id,
+                userId,
+                cancellationToken);
+            if (latestDocument is null
+                || (latestDocument.OwnerId != userId
+                    && latestPermission != DocumentPermission.Edit))
+            {
+                await RecordDeniedAccessAsync(id, "document.text.update", cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return NotFound();
+            }
+
+            await database.Entry(trackedDocument).ReloadAsync(cancellationToken);
+            if (!string.Equals(
+                trackedDocument.StorageKey,
+                originalStorageKey,
+                StringComparison.Ordinal))
+            {
+                return Conflict(new ProblemDetails
+                {
+                    Title = "This document changed while you were editing it.",
+                    Status = StatusCodes.Status409Conflict
+                });
+            }
+
+            var previousVersion = await database.DocumentVersions
+                .Where(version => version.DocumentId == id)
+                .Select(version => (int?)version.VersionNumber)
+                .MaxAsync(cancellationToken) ?? 0;
+            database.DocumentVersions.Add(new DocumentVersion
+            {
+                Id = Guid.NewGuid(),
+                DocumentId = id,
+                VersionNumber = previousVersion + 1,
+                StorageKey = trackedDocument.StorageKey,
+                OriginalFileName = trackedDocument.OriginalFileName,
+                ContentType = trackedDocument.ContentType,
+                SizeBytes = trackedDocument.SizeBytes,
+                UploadedByUserId = trackedDocument.OwnerId,
+                CreatedAtUtc = trackedDocument.UpdatedAtUtc
+            });
+
+            trackedDocument.StorageKey = newStorageKey;
+            trackedDocument.OriginalFileName = outputFileName;
+            trackedDocument.ContentType = outputContentType;
+            trackedDocument.SizeBytes = outputBytes.Length;
+            trackedDocument.UpdatedAtUtc = DateTime.UtcNow;
+            await auditWriter.WriteAsync(
+                HttpContext,
+                id,
+                "document.text.update",
+                AuditResult.Success,
+                JsonSerializer.Serialize(new
+                {
+                    sourceExtension,
+                    outputExtension = Path.GetExtension(outputFileName),
+                    sizeBytes = outputBytes.Length
+                }),
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            committed = true;
+        }
+        finally
+        {
+            if (stored && !committed)
+            {
+                await storage.DeleteAsync(newStorageKey, CancellationToken.None);
+            }
+        }
+
+        return Ok(ToResponse(trackedDocument, document.OwnerId == userId, permission));
+    }
+
+    [HttpPut("{id:guid}/content")]
+    [RequestSizeLimit(MaximumRequestBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaximumRequestBytes)]
+    [ProducesResponseType<DocumentResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<DocumentResponse>> ReplaceContent(
+        Guid id,
+        [FromForm] IFormFile? file,
+        [FromForm] bool purgePreviousVersions,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var (document, permission) = await FindReadableDocumentAsync(
+            id,
+            userId,
+            cancellationToken);
+        if (document is null
+            || (document.OwnerId != userId && permission != DocumentPermission.Edit))
+        {
+            await RecordDeniedAccessAsync(id, "document.content.replace", cancellationToken);
+            return NotFound();
+        }
+
+        if (file is null || file.Length is <= 0 or > MaximumFileBytes)
+        {
+            ModelState.AddModelError(
+                nameof(file),
+                $"The PDF must be between 1 byte and {MaximumFileBytes} bytes.");
+            return ValidationProblem(ModelState);
+        }
+
+        var originalFileName = Path.GetFileName(file.FileName.Replace('\\', '/'));
+        if (string.IsNullOrWhiteSpace(originalFileName)
+            || originalFileName.Length > 255
+            || originalFileName.Any(char.IsControl)
+            || !string.Equals(
+                Path.GetExtension(originalFileName),
+                ".pdf",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            ModelState.AddModelError(nameof(file), "Only PDF files are accepted.");
+            return ValidationProblem(ModelState);
+        }
+
+        await using var input = file.OpenReadStream();
+        var signature = new byte[5];
+        var signatureLength = await input.ReadAsync(signature, cancellationToken);
+        if (signatureLength != signature.Length
+            || !signature.AsSpan().SequenceEqual("%PDF-"u8))
+        {
+            ModelState.AddModelError(
+                nameof(file),
+                "The uploaded file does not have a valid PDF signature.");
+            return ValidationProblem(ModelState);
+        }
+
+        if (!input.CanSeek)
+        {
+            throw new InvalidOperationException("The uploaded file stream must support seeking.");
+        }
+
+        input.Position = 0;
+        var trackedDocument = await database.Documents
+            .FirstAsync(item => item.Id == id && !item.IsDeleted, cancellationToken);
+        var newStorageKey = Guid.NewGuid().ToString("N");
+        var stored = false;
+        var committed = false;
+        var cleanupFailed = false;
+        var storageKeysToPurge = new List<string>();
+        try
+        {
+            await storage.StoreAsync(newStorageKey, input, cancellationToken);
+            stored = true;
+
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken);
+            await LockAuditChainAsync(cancellationToken);
+            var (latestDocument, latestPermission) = await FindReadableDocumentAsync(
+                id,
+                userId,
+                cancellationToken);
+            if (latestDocument is null
+                || (latestDocument.OwnerId != userId
+                    && latestPermission != DocumentPermission.Edit))
+            {
+                await RecordDeniedAccessAsync(id, "document.content.replace", cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return NotFound();
+            }
+
+            permission = latestPermission;
+            await database.Entry(trackedDocument).ReloadAsync(cancellationToken);
+            var previousStorageKey = trackedDocument.StorageKey;
+            var priorVersions = await database.DocumentVersions
+                .Where(version => version.DocumentId == id)
+                .OrderBy(version => version.VersionNumber)
+                .ToListAsync(cancellationToken);
+            var previousVersion = priorVersions
+                .Select(version => (int?)version.VersionNumber)
+                .Max() ?? 0;
+            if (purgePreviousVersions)
+            {
+                storageKeysToPurge.Add(previousStorageKey);
+                storageKeysToPurge.AddRange(priorVersions.Select(version => version.StorageKey));
+                database.DocumentVersions.RemoveRange(priorVersions);
+            }
+            else
+            {
+                database.DocumentVersions.Add(new DocumentVersion
+                {
+                    Id = Guid.NewGuid(),
+                    DocumentId = id,
+                    VersionNumber = previousVersion + 1,
+                    StorageKey = previousStorageKey,
+                    OriginalFileName = trackedDocument.OriginalFileName,
+                    ContentType = trackedDocument.ContentType,
+                    SizeBytes = trackedDocument.SizeBytes,
+                    UploadedByUserId = trackedDocument.OwnerId,
+                    CreatedAtUtc = trackedDocument.UpdatedAtUtc
+                });
+            }
+
+            trackedDocument.StorageKey = newStorageKey;
+            trackedDocument.OriginalFileName = originalFileName;
+            trackedDocument.ContentType = "application/pdf";
+            trackedDocument.SizeBytes = file.Length;
+            trackedDocument.UpdatedAtUtc = DateTime.UtcNow;
+            await auditWriter.WriteAsync(
+                HttpContext,
+                id,
+                "document.content.replace",
+                AuditResult.Success,
+                JsonSerializer.Serialize(new
+                {
+                    sizeBytes = file.Length,
+                    previousVersion = purgePreviousVersions ? (int?)null : previousVersion + 1,
+                    purgedPreviousVersions = purgePreviousVersions
+                }),
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            committed = true;
+
+            foreach (var storageKey in storageKeysToPurge.Distinct(StringComparer.Ordinal))
+            {
+                try
+                {
+                    await storage.DeleteAsync(storageKey, CancellationToken.None);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException)
+                {
+                    logger.LogError(
+                        exception,
+                        "Could not remove previous document content for {DocumentId}.",
+                        id);
+                    cleanupFailed = true;
+                }
+            }
+        }
+        finally
+        {
+            if (stored && !committed)
+            {
+                await storage.DeleteAsync(newStorageKey, CancellationToken.None);
+            }
+        }
+
+        if (cleanupFailed)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "The PDF was saved, but previous files could not all be removed.",
+                detail: "Do not treat this redaction as complete. Contact the application owner.");
+        }
+
+        return Ok(ToResponse(trackedDocument, document.OwnerId == userId, permission));
+    }
+
+    [HttpGet("{id:guid}/versions")]
+    [ProducesResponseType<IReadOnlyList<DocumentVersionResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<DocumentVersionResponse>>> ListVersions(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        if ((await FindReadableDocumentAsync(id, userId, cancellationToken)).Document is null)
+        {
+            await RecordDeniedAccessAsync(id, "document.versions.list", cancellationToken);
+            return NotFound();
+        }
+
+        var versions = await database.DocumentVersions
+            .AsNoTracking()
+            .Where(version => version.DocumentId == id)
+            .OrderByDescending(version => version.VersionNumber)
+            .Select(version => new DocumentVersionResponse(
+                version.VersionNumber,
+                version.OriginalFileName,
+                version.SizeBytes,
+                version.CreatedAtUtc))
+            .ToListAsync(cancellationToken);
+        await auditWriter.WriteAsync(
+            HttpContext,
+            id,
+            "document.versions.list",
+            AuditResult.Success,
+            "{}",
+            cancellationToken);
+        return Ok(versions);
+    }
+
+    [HttpGet("{id:guid}/versions/{versionNumber:int}/content")]
+    public async Task<IActionResult> DownloadVersion(
+        Guid id,
+        int versionNumber,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        if ((await FindReadableDocumentAsync(id, userId, cancellationToken)).Document is null)
+        {
+            await RecordDeniedAccessAsync(id, "document.version.download", cancellationToken);
+            return NotFound();
+        }
+
+        var version = await database.DocumentVersions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                item => item.DocumentId == id && item.VersionNumber == versionNumber,
+                cancellationToken);
+        if (version is null)
+        {
+            return NotFound();
+        }
+
+        Stream content;
+        try
+        {
+            content = await storage.OpenReadAsync(version.StorageKey, cancellationToken);
+        }
+        catch (FileNotFoundException exception)
+        {
+            logger.LogError(
+                exception,
+                "Stored document version {DocumentId} version {VersionNumber} is missing.",
+                id,
+                versionNumber);
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Document storage is temporarily unavailable.");
+        }
+
+        try
+        {
+            await auditWriter.WriteAsync(
+                HttpContext,
+                id,
+                "document.version.download",
+                AuditResult.Success,
+                JsonSerializer.Serialize(new { versionNumber }),
+                cancellationToken);
+        }
+        catch
+        {
+            await content.DisposeAsync();
+            throw;
+        }
+
+        return File(content, version.ContentType, version.OriginalFileName);
+    }
+
     private async Task<(Document? Document, DocumentPermission? Permission)>
         FindReadableDocumentAsync(
             Guid documentId,
@@ -526,6 +1266,11 @@ public sealed class DocumentsController(
 
     private bool TryGetUserId(out Guid userId) =>
         Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out userId);
+
+    private static bool IsTextEditableExtension(string extension) =>
+        extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals(".doc", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals(".docx", StringComparison.OrdinalIgnoreCase);
 
     private static DocumentResponse ToResponse(
         Document document,

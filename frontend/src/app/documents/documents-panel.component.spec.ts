@@ -1,10 +1,12 @@
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
+import { By } from '@angular/platform-browser';
 import { TestBed } from '@angular/core/testing';
 import { environment } from '../../environments/environment';
 import { AuthSessionStore } from '../auth/auth-session.store';
 import { bearerTokenInterceptor } from '../auth/bearer-token.interceptor';
 import { DocumentsPanelComponent } from './documents-panel.component';
+import { DocumentTextEditorComponent } from './document-text-editor.component';
 import { DocumentGrantItem, DocumentItem } from './document.service';
 
 describe('DocumentsPanelComponent', () => {
@@ -84,7 +86,101 @@ describe('DocumentsPanelComponent', () => {
     fixture.detectChanges();
 
     expect(component.documents()).toEqual([documentItem]);
-    expect(component.message()).toBe('Your PDF was uploaded.');
+    expect(component.message()).toBe('test.pdf was uploaded.');
+    fixture.destroy();
+  });
+
+  it('accepts TXT and Word files for upload and offers the text editor', () => {
+    const fixture = TestBed.createComponent(DocumentsPanelComponent);
+    const component = fixture.componentInstance;
+    fixture.detectChanges();
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([]);
+
+    const fileInput = fixture.nativeElement.querySelector(
+      '#document-file',
+    ) as HTMLInputElement;
+    expect(fileInput.accept).toContain('.txt');
+    expect(fileInput.accept).toContain('.doc');
+    expect(fileInput.accept).toContain('.docx');
+
+    for (const file of [
+      new File(['plain text'], 'notes.txt', { type: 'text/plain' }),
+      new File(['word data'], 'report.doc', { type: 'application/msword' }),
+      new File(['word data'], 'report.docx', {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      }),
+    ]) {
+      selectFile(fixture.nativeElement, file);
+      expect(component.selectedFile()).toBe(file);
+      expect(component.error()).toBeNull();
+    }
+
+    component.documents.set([
+      { ...documentItem, originalFileName: 'notes.txt' },
+      { ...documentItem, id: 'document-2', originalFileName: 'report.docx' },
+    ]);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.edit-button').length).toBe(2);
+    fixture.destroy();
+  });
+
+  it('edits TXT content and keeps the file actions grouped in the document row', async () => {
+    const fixture = TestBed.createComponent(DocumentsPanelComponent);
+    fixture.detectChanges();
+    const textDocument: DocumentItem = {
+      ...documentItem,
+      originalFileName: 'notes.txt',
+      sizeBytes: 16,
+    };
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([textDocument]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.document-actions')).not.toBeNull();
+    (fixture.nativeElement.querySelector('.edit-button') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    http
+      .expectOne(`${environment.apiBaseUrl}/documents/${textDocument.id}/editable-text`)
+      .flush({ text: 'Original text' });
+    http
+      .expectOne(`${environment.apiBaseUrl}/documents/${textDocument.id}/versions`)
+      .flush([]);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const textEditor = fixture.debugElement.query(
+      By.directive(DocumentTextEditorComponent),
+    ).componentInstance as DocumentTextEditorComponent;
+    expect(textEditor.text()).withContext(
+      `loading=${textEditor.loading()} error=${textEditor.error()}`,
+    ).toBe('Original text');
+    const textArea = fixture.nativeElement.querySelector(
+      '#document-text-content',
+    ) as HTMLTextAreaElement;
+    expect(textArea.value).toBe('Original text');
+    textArea.value = 'Updated text';
+    textArea.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    (fixture.nativeElement.querySelector(
+      '.text-editor-dialog .primary-button',
+    ) as HTMLButtonElement).click();
+
+    const updateRequest = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${textDocument.id}/editable-text`,
+    );
+    expect(updateRequest.request.method).toBe('PUT');
+    expect(updateRequest.request.body).toEqual({ text: 'Updated text' });
+    const updatedDocument = { ...textDocument, sizeBytes: 12 };
+    updateRequest.flush(updatedDocument);
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([updatedDocument]);
+    http
+      .expectOne(`${environment.apiBaseUrl}/documents/${textDocument.id}/versions`)
+      .flush([]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('notes.txt');
+    expect(fixture.nativeElement.textContent).toContain('The text file was saved');
     fixture.destroy();
   });
 
@@ -158,6 +254,10 @@ describe('DocumentsPanelComponent', () => {
     const permissionSelect = fixture.nativeElement.querySelector(
       '.grant-form select[name="permission"]',
     ) as HTMLSelectElement;
+    expect(Array.from(permissionSelect.options).map((option) => option.value)).toEqual([
+      'READ',
+      'EDIT',
+    ]);
     permissionSelect.value = 'READ';
     const grantForm = fixture.nativeElement.querySelector('.grant-form') as HTMLFormElement;
     grantForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
