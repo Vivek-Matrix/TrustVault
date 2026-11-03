@@ -1,16 +1,16 @@
 # TrustVault
 
-TrustVault is a secure document-sharing platform. Sprint 1 authentication is
-implemented, and Sprint 2 adds an owner-only document API slice with private
-local PDF storage and audit events. Sharing, refresh-token issuance, the
-production deployment, and named-user sharing are not implemented yet.
+TrustVault is a document-sharing prototype. Sprint 1 authentication and the
+Sprint 2 owner-only document lifecycle are implemented. Named-user READ/EDIT
+grants, active-grant listing, and revocation are now implemented locally.
+Refresh-token issuance and production deployment are not implemented.
 
 ## Architecture
 
 - `frontend/`: Angular 21 and TypeScript.
 - `backend/TrustVault.Api`: ASP.NET Core 10 API, Identity registration/login,
   short-lived JWT validation, deny-by-default authorization policy, and
-  owner-authorized document endpoints.
+  owner and active-grant document authorization.
 - `backend/TrustVault.Application`: application use cases and private document
   storage contract.
 - `backend/TrustVault.Domain`: document, grant, version, audit, and role types.
@@ -38,9 +38,9 @@ image is built by CI; it is not published to AWS.
 
 The earlier Render deployment instructions are superseded. See the
 [AWS deployment status and prerequisites](docs/deployment.md) before taking
-deployment steps. Do not upload real confidential files until server-side
-named-user authorization, immediate revocation, production-grade storage, and
-audit integrity controls are implemented and tested.
+deployment steps. Do not upload real confidential files: although server-side
+sharing and revocation are implemented locally, production-grade storage and
+audit integrity controls are not.
 
 See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 [docs/backlog.md](docs/backlog.md), and [THREATS.md](THREATS.md).
@@ -90,10 +90,13 @@ client keeps the token in memory only, so closing or reloading the page signs
 the user out. The development API documentation is at `/swagger`.
 
 After signing in, the Angular screen lets you upload, list, refresh, and
-download your own PDFs. Uploads are limited to 10 MiB. The server checks the
-file extension and `%PDF-` signature, then stores it under an opaque generated
-key outside the static web root. The current filesystem provider is for local
-development only. Use dummy files, not confidential documents.
+download PDFs. Owners can grant READ or EDIT permission to another existing
+account and revoke an active grant. Both permissions currently allow reading
+and downloading; document editing is not implemented. Uploads are limited to
+10 MiB. The server checks the file extension and `%PDF-` signature, then stores
+it under an opaque generated key outside the static web root. The current
+filesystem provider is for local development only. Use dummy files, not
+confidential documents.
 
 ### Try the document screen
 
@@ -107,10 +110,20 @@ development only. Use dummy files, not confidential documents.
 5. Sign out, create a second test account, and confirm its document list is
    empty. Automated API tests separately verify that a different account
    cannot retrieve another owner's document, even with its ID.
+6. Sign back in as the owner. On the document, choose **Manage access**, enter
+   the second account's email, leave permission as **Read**, then choose
+   **Grant access**.
+7. Sign out and sign in as the second account. Choose **Refresh list**; the
+   shared document should appear with its permission, and **Download** should
+   work.
+8. Sign back in as the owner, choose **Manage access**, then **Revoke** beside
+   the second account and confirm. Sign back in as that account and refresh:
+   the document should no longer be listed. The API integration tests also
+   verify that revoked access to its old document ID returns 404.
 
 Do not use real confidential files. The browser keeps the access token only in
-memory; refreshing or closing the page signs the user out. The current UI does
-not provide sharing or permission management.
+memory; refreshing or closing the page signs the user out. Use separate
+browser profiles or sign out between accounts during this test.
 
 ## Database
 
@@ -163,15 +176,17 @@ The API validates JWT signatures, issuer, audience, and expiration, and applies
 an authenticated-user fallback policy. Registration assigns the least-privilege
 Viewer role; passwords use Identity's configured requirements and hashing.
 Failed sign-ins trigger Identity lockout, and authentication routes have an
-in-memory per-IP rate limit. Document metadata and downloads are restricted to
-the owner on every request; unauthorized users receive 404. Upload, list,
-metadata, download, and denied access events are recorded using a serialized
-hash chain. The chain is not verified or protected from a privileged database
-operator, so it is not tamper-proof. Named-user grants and revocation, complete
-PDF validation/malware scanning, refresh tokens, email verification, password
-recovery, user suspension management, production storage, and a restricted
-production DB role remain follow-up work. An endpoint is not secure merely
-because its UI is hidden.
+in-memory per-IP rate limit. Document metadata and downloads are available to
+the owner or a user with an active named grant; the server checks grant state
+on each request, so revocation takes effect immediately. Unauthorized users
+receive 404. Upload, list, metadata, download, grant, revoke, and denied access
+events are recorded using a serialized hash chain. The chain is not verified or
+protected from a privileged database operator, so it is not tamper-proof. EDIT
+grants currently provide the same read/download access as READ; editing is not
+implemented. Complete PDF validation/malware scanning, refresh tokens, email
+verification, password recovery, user suspension management, production
+storage, and a restricted production DB role remain follow-up work. An endpoint
+is not secure merely because its UI is hidden.
 
 ## First commit plan
 

@@ -337,6 +337,172 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Theory]
+    [InlineData("READ")]
+    [InlineData("EDIT")]
+    public async Task Owner_can_grant_access_and_shared_user_can_read_until_revoked(
+        string permission)
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var recipient = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var grantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new
+            {
+                email = recipient.Email,
+                permission
+            }));
+        using var granted = await _client.SendAsync(grantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, granted.StatusCode);
+
+        using var grantsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/grants",
+            owner);
+        using var grantsResponse = await _client.SendAsync(grantsRequest);
+        Assert.True(
+            grantsResponse.StatusCode == System.Net.HttpStatusCode.OK,
+            await grantsResponse.Content.ReadAsStringAsync());
+        var activeGrants =
+            await grantsResponse.Content.ReadFromJsonAsync<DocumentGrantResponse[]>();
+        var activeGrant = Assert.Single(activeGrants!);
+        Assert.Equal(recipient.UserId, activeGrant.UserId.ToString());
+        Assert.Equal(recipient.Email, activeGrant.Email);
+        Assert.Equal(permission, activeGrant.Permission);
+
+        using var listRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/documents",
+            recipient);
+        using var list = await _client.SendAsync(listRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, list.StatusCode);
+        var sharedDocuments = await list.Content.ReadFromJsonAsync<DocumentResponse[]>();
+        Assert.NotNull(sharedDocuments);
+        var sharedDocument = Assert.Single(sharedDocuments);
+        Assert.Equal(document.Id, sharedDocument.Id);
+        Assert.False(sharedDocument.IsOwner);
+        Assert.Equal(permission, sharedDocument.Permission);
+
+        using var metadataRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}",
+            recipient);
+        using var metadata = await _client.SendAsync(metadataRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, metadata.StatusCode);
+
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            recipient);
+        using var download = await _client.SendAsync(downloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal(PdfBytes, await download.Content.ReadAsByteArrayAsync());
+
+        using var revokeRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/documents/{document.Id}/grants/{Guid.Parse(recipient.UserId)}",
+            owner);
+        using var revoked = await _client.SendAsync(revokeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, revoked.StatusCode);
+
+        using var listAfterRevokeRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/documents",
+            recipient);
+        using var listAfterRevoke = await _client.SendAsync(listAfterRevokeRequest);
+        var remainingDocuments =
+            await listAfterRevoke.Content.ReadFromJsonAsync<DocumentResponse[]>();
+        Assert.NotNull(remainingDocuments);
+        Assert.Empty(remainingDocuments);
+
+        using var metadataAfterRevokeRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}",
+            recipient);
+        using var metadataAfterRevoke = await _client.SendAsync(metadataAfterRevokeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, metadataAfterRevoke.StatusCode);
+
+        using var downloadAfterRevokeRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            recipient);
+        using var downloadAfterRevoke = await _client.SendAsync(downloadAfterRevokeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, downloadAfterRevoke.StatusCode);
+    }
+
+    [Fact]
+    public async Task Non_owner_cannot_grant_or_revoke_document_access()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var otherUser = await RegisterAndGetSessionAsync();
+        var recipient = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var grantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            otherUser,
+            JsonContent.Create(new { email = "unknown@example.test", permission = "READ" }));
+        using var grant = await _client.SendAsync(grantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, grant.StatusCode);
+
+        using var revokeRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/documents/{document.Id}/grants/{Guid.Parse(recipient.UserId)}",
+            otherUser);
+        using var revoke = await _client.SendAsync(revokeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, revoke.StatusCode);
+    }
+
+    [Fact]
+    public async Task Owner_can_change_active_permission_without_mutating_grant_history()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var recipient = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+        var email = recipient.Email;
+
+        using var readGrantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new { email, permission = "READ" }));
+        using var readGrant = await _client.SendAsync(readGrantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, readGrant.StatusCode);
+
+        using var editGrantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new { email, permission = "EDIT" }));
+        using var editGrant = await _client.SendAsync(editGrantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, editGrant.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var history = await database.DocumentGrants
+            .AsNoTracking()
+            .Where(grant => grant.DocumentId == document.Id
+                && grant.UserId == Guid.Parse(recipient.UserId))
+            .OrderBy(grant => grant.GrantedAtUtc)
+            .ToListAsync();
+        Assert.Equal(2, history.Count);
+        Assert.NotNull(history[0].RevokedAtUtc);
+        Assert.Null(history[1].RevokedAtUtc);
+        Assert.Equal(TrustVault.Domain.Documents.DocumentPermission.Edit, history[1].Permission);
+    }
+
+    [Theory]
     [InlineData("report.txt", "%PDF-1.7\nsample")]
     [InlineData("report.pdf", "not a PDF")]
     public async Task Upload_rejects_files_with_an_invalid_extension_or_signature(
@@ -345,7 +511,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     {
         var owner = await RegisterAndGetSessionAsync();
         using var response = await UploadFileAsync(
-            owner,
+            owner.AccessToken,
             fileName,
             Encoding.ASCII.GetBytes(contents));
         Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
@@ -368,7 +534,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         Encoding.ASCII.GetBytes("%PDF-1.7").CopyTo(oversizedPdf, 0);
 
         using var response = await UploadFileAsync(
-            owner,
+            owner.AccessToken,
             "large.pdf",
             oversizedPdf);
 
@@ -385,14 +551,17 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     private static readonly byte[] PdfBytes = Encoding.ASCII.GetBytes(
         "%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF");
 
-    private async Task<string> RegisterAndGetSessionAsync()
+    private async Task<AuthResponse> RegisterAndGetSessionAsync()
     {
         using var response = await RegisterAsync(NewEmail());
         Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
         var auth = await response.Content.ReadFromJsonAsync<AuthResponse>();
         Assert.NotNull(auth);
-        return auth.AccessToken;
+        return auth;
     }
+
+    private Task<HttpResponseMessage> UploadPdfAsync(AuthResponse auth) =>
+        UploadFileAsync(auth.AccessToken, "report.pdf", PdfBytes);
 
     private Task<HttpResponseMessage> UploadPdfAsync(string accessToken) =>
         UploadFileAsync(accessToken, "report.pdf", PdfBytes);
@@ -418,9 +587,24 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     private static HttpRequestMessage CreateAuthorizedRequest(
         HttpMethod method,
         string path,
-        string accessToken)
+        AuthResponse auth,
+        HttpContent? content = null)
     {
-        var request = new HttpRequestMessage(method, path);
+        var request = CreateAuthorizedRequest(method, path, auth.AccessToken);
+        request.Content = content;
+        return request;
+    }
+
+    private static HttpRequestMessage CreateAuthorizedRequest(
+        HttpMethod method,
+        string path,
+        string accessToken,
+        HttpContent? content = null)
+    {
+        var request = new HttpRequestMessage(method, path)
+        {
+            Content = content
+        };
         request.Headers.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
         return request;

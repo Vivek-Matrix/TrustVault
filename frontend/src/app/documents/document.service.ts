@@ -12,6 +12,15 @@ export interface DocumentItem {
   sizeBytes: number;
   createdAtUtc: string;
   updatedAtUtc: string;
+  isOwner: boolean;
+  permission: 'READ' | 'EDIT' | null;
+}
+
+export interface DocumentGrantItem {
+  userId: string;
+  email: string;
+  permission: 'READ' | 'EDIT';
+  grantedAtUtc: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -35,5 +44,28 @@ export class DocumentService {
     return this.http.get(`${this.documentsUrl}/${encodeURIComponent(id)}/content`, {
       responseType: 'blob',
     });
+  }
+
+  listGrants(documentId: string): Observable<DocumentGrantItem[]> {
+    return this.http.get<DocumentGrantItem[]>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants`,
+    );
+  }
+
+  grantAccess(
+    documentId: string,
+    email: string,
+    permission: 'READ' | 'EDIT',
+  ): Observable<DocumentGrantItem> {
+    return this.http.post<DocumentGrantItem>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants`,
+      { email, permission },
+    );
+  }
+
+  revokeAccess(documentId: string, userId: string): Observable<void> {
+    return this.http.delete<void>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants/${encodeURIComponent(userId)}`,
+    );
   }
 }

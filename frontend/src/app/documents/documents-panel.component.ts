@@ -2,7 +2,11 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { finalize } from 'rxjs';
-import { DocumentItem, DocumentService } from './document.service';
+import {
+  DocumentGrantItem,
+  DocumentItem,
+  DocumentService,
+} from './document.service';
 
 const maximumFileBytes = 10 * 1024 * 1024;
 
@@ -26,7 +30,8 @@ const maximumFileBytes = 10 * 1024 * 1024;
       </div>
 
       <p class="intro">
-        Upload a PDF or download one you own. Files are limited to 10 MiB.
+        Upload a PDF, share it with an existing user, or download a file shared with you.
+        Files are limited to 10 MiB.
         Use test files only; this local storage is not for confidential documents.
       </p>
 
@@ -71,7 +76,7 @@ const maximumFileBytes = 10 * 1024 * 1024;
       </form>
 
       <div class="list-heading">
-        <h3>Your documents</h3>
+        <h3>Your and shared documents</h3>
         <span>{{ documents().length }} {{ documents().length === 1 ? 'file' : 'files' }}</span>
       </div>
 
@@ -94,7 +99,67 @@ const maximumFileBytes = 10 * 1024 * 1024;
                 (click)="downloadDocument(item)">
                 {{ downloadingId() === item.id ? 'Downloading...' : 'Download' }}
               </button>
+              @if (item.isOwner) {
+                <button
+                  class="secondary-button access-button"
+                  type="button"
+                  [attr.aria-expanded]="selectedShareDocumentId() === item.id"
+                  (click)="toggleAccess(item.id)">
+                  {{ selectedShareDocumentId() === item.id ? 'Close access' : 'Manage access' }}
+                </button>
+              } @else {
+                <span class="permission-badge">{{ item.permission }} access</span>
+              }
             </li>
+            @if (item.isOwner && selectedShareDocumentId() === item.id) {
+              <li class="access-panel">
+                <h4>People with access</h4>
+                @if (grantsLoading()) {
+                  <p class="empty-state">Loading access list...</p>
+                } @else if (grants().length === 0) {
+                  <p class="empty-state">No one else has access to this document.</p>
+                } @else {
+                  <ul class="grant-list">
+                    @for (grant of grants(); track grant.userId) {
+                      <li class="grant-item">
+                        <span>{{ grant.email }} · {{ grant.permission }}</span>
+                        <button
+                          class="secondary-button revoke-button"
+                          type="button"
+                          [disabled]="revokingUserId() === grant.userId"
+                          (click)="revokeAccess(item.id, grant)">
+                          {{ revokingUserId() === grant.userId ? 'Revoking...' : 'Revoke' }}
+                        </button>
+                      </li>
+                    }
+                  </ul>
+                }
+
+                <form class="grant-form" (submit)="grantAccess(item.id, $event)">
+                  <label [for]="'share-email-' + item.id">Share with an existing account</label>
+                  <input
+                    [id]="'share-email-' + item.id"
+                    type="email"
+                    name="email"
+                    autocomplete="email"
+                    required />
+                  <label [for]="'share-permission-' + item.id">Permission</label>
+                  <select [id]="'share-permission-' + item.id" name="permission">
+                    <option value="READ">Read</option>
+                    <option value="EDIT">Edit</option>
+                  </select>
+                  <span class="field-hint">
+                    Edit permission is recorded for the future editing workflow; editing is not available yet.
+                  </span>
+                  <button
+                    class="primary-button"
+                    type="submit"
+                    [disabled]="grantSubmitting()">
+                    {{ grantSubmitting() ? 'Saving access...' : 'Grant access' }}
+                  </button>
+                </form>
+              </li>
+            }
           }
         </ul>
       }
@@ -111,6 +176,11 @@ export class DocumentsPanelComponent {
   readonly loading = signal(false);
   readonly uploading = signal(false);
   readonly downloadingId = signal<string | null>(null);
+  readonly selectedShareDocumentId = signal<string | null>(null);
+  readonly grants = signal<DocumentGrantItem[]>([]);
+  readonly grantsLoading = signal(false);
+  readonly grantSubmitting = signal(false);
+  readonly revokingUserId = signal<string | null>(null);
   readonly message = signal<string | null>(null);
   readonly error = signal<string | null>(null);
   readonly form = this.formBuilder.nonNullable.group({
@@ -214,6 +284,90 @@ export class DocumentsPanelComponent {
           this.message.set(`Downloaded ${item.originalFileName}.`);
         },
         error: (error: unknown) => this.error.set(this.describeError(error, 'download this PDF')),
+      });
+  }
+
+  toggleAccess(documentId: string): void {
+    if (this.selectedShareDocumentId() === documentId) {
+      this.selectedShareDocumentId.set(null);
+      this.grants.set([]);
+      return;
+    }
+
+    this.selectedShareDocumentId.set(documentId);
+    this.loadGrants(documentId);
+  }
+
+  grantAccess(documentId: string, event: Event): void {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!(form instanceof HTMLFormElement) || !form.reportValidity() || this.grantSubmitting()) {
+      return;
+    }
+
+    const values = new FormData(form);
+    const email = values.get('email');
+    const permission = values.get('permission');
+    if (
+      typeof email !== 'string' ||
+      (permission !== 'READ' && permission !== 'EDIT')
+    ) {
+      this.error.set('Enter an email and choose READ or EDIT access.');
+      return;
+    }
+
+    this.error.set(null);
+    this.message.set(null);
+    this.grantSubmitting.set(true);
+    this.documentService
+      .grantAccess(documentId, email.trim(), permission)
+      .pipe(finalize(() => this.grantSubmitting.set(false)))
+      .subscribe({
+        next: () => {
+          form.reset();
+          this.message.set('Document access was saved.');
+          this.loadGrants(documentId);
+        },
+        error: (error: unknown) =>
+          this.error.set(this.describeError(error, 'grant document access')),
+      });
+  }
+
+  revokeAccess(documentId: string, grant: DocumentGrantItem): void {
+    if (
+      this.revokingUserId() ||
+      !globalThis.confirm(`Revoke ${grant.email}'s access to this document?`)
+    ) {
+      return;
+    }
+
+    this.error.set(null);
+    this.message.set(null);
+    this.revokingUserId.set(grant.userId);
+    this.documentService
+      .revokeAccess(documentId, grant.userId)
+      .pipe(finalize(() => this.revokingUserId.set(null)))
+      .subscribe({
+        next: () => {
+          this.message.set(`Access for ${grant.email} was revoked.`);
+          this.loadGrants(documentId);
+          this.refreshDocuments();
+        },
+        error: (error: unknown) =>
+          this.error.set(this.describeError(error, 'revoke document access')),
+      });
+  }
+
+  private loadGrants(documentId: string): void {
+    this.grantsLoading.set(true);
+    this.error.set(null);
+    this.documentService
+      .listGrants(documentId)
+      .pipe(finalize(() => this.grantsLoading.set(false)))
+      .subscribe({
+        next: (grants) => this.grants.set(grants),
+        error: (error: unknown) =>
+          this.error.set(this.describeError(error, 'load document access')),
       });
   }
 

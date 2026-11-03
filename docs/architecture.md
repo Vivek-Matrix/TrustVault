@@ -8,34 +8,36 @@ audit events. AWS is the selected cloud provider for a future deployment.
 Specific AWS hosting and database services have not been selected. The existing
 Docker image serves the API and Angular app on one origin, but CI only builds
 the image; it does not publish or deploy it. No AWS infrastructure is configured.
-Do not upload real confidential files until server-side authorization,
-revocation, secure storage, and audit behavior are implemented and tested.
+Do not upload real confidential files. Server-side authorization and revocation
+are implemented locally, but production storage and complete audit-integrity
+controls are not.
 
 ## Authorization model
 
 Roles are `Administrator`, `DocumentOwner`, and `Viewer`. Roles describe broad
-capabilities, not document access. The planned document ACL is a per-document
-grant to a named user with `Read` or `Edit`; only the owner may grant, revoke, or
-delete. An administrator does not inherit document access. A revoked grant is
-retained for history and takes effect when the server evaluates the active grant
-on each request.
+capabilities, not document access. The per-document ACL is a grant to a named
+user with `Read` or `Edit`; only the owner may grant or revoke. An administrator
+does not inherit document access. A revoked grant is retained for history and
+takes effect when the server evaluates active grants on each request. `Edit` is
+currently recorded as a permission but has no editing endpoint; it allows the
+same read/download actions as `Read`.
 
 The API's fallback policy requires authentication; health, registration/login,
 and the development OpenAPI document are explicit anonymous exceptions. The
 database readiness endpoint remains protected by the fallback policy. JWT
 validation requires a secret key supplied through configuration and rejects
 keys under 32 UTF-8 bytes. Registration assigns the Viewer role, and issued
-access tokens default to 15 minutes. Account suspension administration and
-revocation of already-issued tokens, document ACL handlers, and refresh-token
-rotation remain future work.
+access tokens default to 15 minutes. Account suspension administration,
+revocation of already-issued tokens, and refresh-token rotation remain future
+work.
 
 ## Data model
 
 Identity tables are created by ASP.NET Core Identity. `documents` stores metadata
-and an opaque storage key, never a client-provided path. Current document
-endpoints filter by the authenticated owner on every request. `document_grants`
-preserves grant/revocation history and permits at most one active grant for a
-document/user pair. `document_versions` has a unique version number per
+and an opaque storage key, never a client-provided path. Document listing,
+metadata, and downloads authorize the owner or a current active grantee on
+every request. `document_grants` preserves grant/revocation history and permits
+at most one active grant for a document/user pair. `document_versions` has a unique version number per
 document. `audit_events` stores request/actor/result fields and a serialized
 SHA-256 hash chain. Audit writes are serialized with a PostgreSQL transaction
 advisory lock. EF saves reject modifications/deletions and the initial migration
@@ -45,8 +47,8 @@ tamper-proof against a privileged database operator.
 
 The EF model adds indexes for owner/date, category/date, grant user/document,
 version ordering, and audit actor/document/time queries. User identifiers,
-ownership, permission level, and storage keys must be derived or authorized by
-the server in later API stories.
+ownership, permission level, and storage keys are derived or authorized by the
+server.
 
 ## File and audit controls
 
@@ -56,8 +58,9 @@ the server in later API stories.
 - Uploads are limited to 10 MiB and checked for a `.pdf` extension and `%PDF-`
   signature. Full PDF parsing, malware scanning, quotas, and production private
   object storage remain future work.
-- Every implemented metadata/download request checks the authenticated owner;
-  named-user grants and immediate revocation are not implemented.
+- Every implemented list/metadata/download request checks ownership or an
+  active named-user grant. Revocation is checked live, so it takes effect on
+  the next request.
 - Upload metadata and its success audit event commit in one database
   transaction. Denied metadata/download attempts and other successful document
   operations are recorded. Chain verification and protection from a privileged

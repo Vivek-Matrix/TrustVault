@@ -8,4 +8,6 @@ public sealed record DocumentResponse(
     string OriginalFileName,
     long SizeBytes,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    bool IsOwner,
+    string? Permission);

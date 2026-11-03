@@ -187,3 +187,32 @@ written; the repository now has an `origin` remote.
   production build now pass without style-budget warnings.
 - **Commit:** Pending; record the commit reference after the changes are
   committed.
+
+## 2026-11-03 — Named-user sharing and revocation
+
+- **Asked:** Continue building TrustVault after the owner-only document screen,
+  adding named-user sharing and revocation in both the API and UI.
+- **Produced:** Added owner-only grant listing/creation/revocation endpoints.
+  Active grants authorize a user's document list, metadata, and downloads;
+  revocation is checked live and preserved in grant history. Added Angular
+  controls for sharing with an existing account, selecting READ/EDIT, viewing
+  grants, and revoking access. Updated API, architecture, threat, backlog, and
+  beginner test instructions. EDIT currently permits the same read/download
+  operations as READ; editing is not implemented.
+- **Validation:** All 32 backend tests and all 13 frontend tests pass, and
+  frontend lint and .NET formatting verification pass. The production build
+  passes; manual two-account verification remains.
+- **Commit:** Pending; record the commit reference after the changes are
+  committed.
+
+## 2026-11-03 — Fixing grant-list failure
+
+- **Reported:** The owner saw an access error after choosing **Manage access**,
+  could grant access, but could not see active grants or revoke access.
+- **Cause and fix:** The API's active-grant listing ordered by a property on a
+  constructed response record. EF Core could not translate that query and
+  returned HTTP 500. Ordered the database projection before constructing the
+  response DTO, and added API and UI regression assertions that the grant
+  appears with its **Revoke** control.
+- **Validation:** All 32 backend tests, all 13 frontend tests, and .NET format
+  verification pass.

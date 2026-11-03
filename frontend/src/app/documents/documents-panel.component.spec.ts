@@ -5,7 +5,7 @@ import { environment } from '../../environments/environment';
 import { AuthSessionStore } from '../auth/auth-session.store';
 import { bearerTokenInterceptor } from '../auth/bearer-token.interceptor';
 import { DocumentsPanelComponent } from './documents-panel.component';
-import { DocumentItem } from './document.service';
+import { DocumentGrantItem, DocumentItem } from './document.service';
 
 describe('DocumentsPanelComponent', () => {
   let http: HttpTestingController;
@@ -20,6 +20,8 @@ describe('DocumentsPanelComponent', () => {
     sizeBytes: 64,
     createdAtUtc: '2026-11-03T00:00:00Z',
     updatedAtUtc: '2026-11-03T00:00:00Z',
+    isOwner: true,
+    permission: null,
   };
 
   beforeEach(() => {
@@ -128,6 +130,101 @@ describe('DocumentsPanelComponent', () => {
     expect(click).toHaveBeenCalled();
     expect(revokeObjectUrl).toHaveBeenCalledWith('blob:test-file');
     expect(component.message()).toBe('Downloaded test.pdf.');
+    fixture.destroy();
+  });
+
+  it('grants access by email and reloads the active grants', () => {
+    const fixture = TestBed.createComponent(DocumentsPanelComponent);
+    fixture.detectChanges();
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([documentItem]);
+    fixture.detectChanges();
+
+    const manageButton = fixture.nativeElement.querySelector(
+      '.access-button',
+    ) as HTMLButtonElement;
+    manageButton.click();
+    const grantsRequest = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${documentItem.id}/grants`,
+    );
+    expect(grantsRequest.request.method).toBe('GET');
+    grantsRequest.flush([]);
+    fixture.detectChanges();
+
+    const emailInput = fixture.nativeElement.querySelector(
+      '.grant-form input[name="email"]',
+    ) as HTMLInputElement;
+    emailInput.value = 'recipient@example.test';
+    emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+    const permissionSelect = fixture.nativeElement.querySelector(
+      '.grant-form select[name="permission"]',
+    ) as HTMLSelectElement;
+    permissionSelect.value = 'READ';
+    const grantForm = fixture.nativeElement.querySelector('.grant-form') as HTMLFormElement;
+    grantForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    const grantRequest = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${documentItem.id}/grants`,
+    );
+    expect(grantRequest.request.method).toBe('POST');
+    expect(grantRequest.request.body).toEqual({
+      email: 'recipient@example.test',
+      permission: 'READ',
+    });
+    const grant: DocumentGrantItem = {
+      userId: 'recipient-1',
+      email: 'recipient@example.test',
+      permission: 'READ',
+      grantedAtUtc: '2026-11-03T00:00:00Z',
+    };
+    grantRequest.flush(grant);
+
+    const refreshedGrants = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${documentItem.id}/grants`,
+    );
+    refreshedGrants.flush([grant]);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('recipient@example.test');
+    expect(fixture.nativeElement.querySelector('.revoke-button')).not.toBeNull();
+    expect(fixture.componentInstance.message()).toBe('Document access was saved.');
+    fixture.destroy();
+  });
+
+  it('confirms and revokes an active share, then refreshes documents and grants', () => {
+    const fixture = TestBed.createComponent(DocumentsPanelComponent);
+    fixture.detectChanges();
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([documentItem]);
+    fixture.detectChanges();
+
+    fixture.nativeElement.querySelector('.access-button').click();
+    http
+      .expectOne(`${environment.apiBaseUrl}/documents/${documentItem.id}/grants`)
+      .flush([]);
+
+    const grant: DocumentGrantItem = {
+      userId: 'recipient-1',
+      email: 'recipient@example.test',
+      permission: 'EDIT',
+      grantedAtUtc: '2026-11-03T00:00:00Z',
+    };
+    fixture.componentInstance.grants.set([grant]);
+    fixture.detectChanges();
+    spyOn(globalThis, 'confirm').and.returnValue(true);
+    (fixture.nativeElement.querySelector('.revoke-button') as HTMLButtonElement).click();
+
+    const revokeRequest = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${documentItem.id}/grants/${grant.userId}`,
+    );
+    expect(revokeRequest.request.method).toBe('DELETE');
+    revokeRequest.flush(null);
+
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([documentItem]);
+    http
+      .expectOne(`${environment.apiBaseUrl}/documents/${documentItem.id}/grants`)
+      .flush([]);
+    fixture.detectChanges();
+    expect(fixture.componentInstance.message()).toBe(
+      'Access for recipient@example.test was revoked.',
+    );
     fixture.destroy();
   });
 
