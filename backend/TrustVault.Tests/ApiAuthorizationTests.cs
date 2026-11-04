@@ -200,6 +200,37 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Refresh_token_endpoint_rotates_tokens_and_rejects_stale_token()
+    {
+        var email = NewEmail();
+        using var registration = await RegisterAsync(email);
+        var initialAuth = await registration.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(initialAuth);
+        Assert.False(string.IsNullOrWhiteSpace(initialAuth.RefreshToken));
+
+        using var refreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh")
+        {
+            Content = JsonContent.Create(new { refreshToken = initialAuth.RefreshToken })
+        };
+        using var refreshResponse = await _client.SendAsync(refreshRequest);
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, refreshResponse.StatusCode);
+        var rotatedAuth = await refreshResponse.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(rotatedAuth);
+        Assert.False(string.IsNullOrWhiteSpace(rotatedAuth.RefreshToken));
+        Assert.NotEqual(initialAuth.RefreshToken, rotatedAuth.RefreshToken);
+        Assert.NotNull(rotatedAuth.RefreshTokenExpiresAtUtc);
+
+        using var staleRefreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh")
+        {
+            Content = JsonContent.Create(new { refreshToken = initialAuth.RefreshToken })
+        };
+        using var staleRefreshResponse = await _client.SendAsync(staleRefreshRequest);
+
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, staleRefreshResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task Login_locks_account_after_repeated_failed_passwords()
     {
         var email = NewEmail();
@@ -340,6 +371,229 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
             .ToListAsync();
         Assert.Equal(2, deniedEvents.Count);
         Assert.All(deniedEvents, item => Assert.Equal(64, item.RecordHash.Length));
+    }
+
+    [Fact]
+    public async Task Document_audits_show_create_read_edit_and_require_active_document_access()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var reader = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            owner);
+        using var download = await _client.SendAsync(downloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+
+        using var editRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}",
+            owner,
+            JsonContent.Create(new
+            {
+                title = "Updated title",
+                description = (string?)null,
+                category = "Reviewed"
+            }));
+        using var edit = await _client.SendAsync(editRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, edit.StatusCode);
+
+        using var grantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new { email = reader.Email, permission = "READ" }));
+        using var grant = await _client.SendAsync(grantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, grant.StatusCode);
+
+        using var readerDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            reader);
+        using var readerDownload = await _client.SendAsync(readerDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, readerDownload.StatusCode);
+
+        using var deniedEditRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}",
+            reader,
+            JsonContent.Create(new
+            {
+                title = "Unauthorized title",
+                description = (string?)null,
+                category = "Reviewed"
+            }));
+        using var deniedEdit = await _client.SendAsync(deniedEditRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, deniedEdit.StatusCode);
+
+        using var auditsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/audits",
+            reader);
+        using var auditsResponse = await _client.SendAsync(auditsRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, auditsResponse.StatusCode);
+        var audits = await auditsResponse.Content.ReadFromJsonAsync<DocumentAuditResponse[]>();
+        Assert.NotNull(audits);
+        Assert.Contains(audits, item =>
+            item.Activity == "CREATED"
+            && item.ActorEmail == owner.Email
+            && item.Result == "SUCCESS");
+        Assert.Contains(audits, item =>
+            item.Activity == "READ"
+            && item.ActorEmail == reader.Email
+            && item.Result == "SUCCESS");
+        Assert.Contains(audits, item =>
+            item.Activity == "EDITED"
+            && item.ActorEmail == owner.Email
+            && item.Result == "SUCCESS");
+        Assert.Contains(audits, item =>
+            item.Activity == "EDITED"
+            && item.ActorEmail == reader.Email
+            && item.Result == "DENIED");
+        Assert.Equal(
+            audits.OrderByDescending(item => item.TimestampUtc).Select(item => item.Id),
+            audits.Select(item => item.Id));
+
+        var stranger = await RegisterAndGetSessionAsync();
+        using var deniedAuditsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/audits",
+            stranger);
+        using var deniedAudits = await _client.SendAsync(deniedAuditsRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, deniedAudits.StatusCode);
+
+        using var revokeRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/documents/{document.Id}/grants/{reader.UserId}",
+            owner);
+        using var revoked = await _client.SendAsync(revokeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, revoked.StatusCode);
+
+        using var revokedAuditsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/audits",
+            reader);
+        using var revokedAudits = await _client.SendAsync(revokedAuditsRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, revokedAudits.StatusCode);
+    }
+
+    [Fact]
+    public async Task Owner_removing_document_revokes_all_grants_and_removes_file_access()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        var reader = await RegisterAndGetSessionAsync();
+        var editor = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var replaceRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}/content",
+            owner,
+            CreatePdfContent("replacement.pdf", Encoding.ASCII.GetBytes("%PDF-1.7\nreplacement")));
+        using var replaced = await _client.SendAsync(replaceRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, replaced.StatusCode);
+
+        string[] storageKeys;
+        using (var keyScope = _factory.Services.CreateScope())
+        {
+            var keyDatabase = keyScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var currentStorageKey = await keyDatabase.Documents
+                .AsNoTracking()
+                .Where(item => item.Id == document.Id)
+                .Select(item => item.StorageKey)
+                .SingleAsync();
+            var previousStorageKeys = await keyDatabase.DocumentVersions
+                .AsNoTracking()
+                .Where(version => version.DocumentId == document.Id)
+                .Select(version => version.StorageKey)
+                .ToArrayAsync();
+            storageKeys = previousStorageKeys.Append(currentStorageKey).ToArray();
+        }
+
+        foreach (var (recipient, permission) in new[]
+        {
+            (reader, "READ"),
+            (editor, "EDIT")
+        })
+        {
+            using var grantRequest = CreateAuthorizedRequest(
+                HttpMethod.Post,
+                $"/api/documents/{document.Id}/grants",
+                owner,
+                JsonContent.Create(new { email = recipient.Email, permission }));
+            using var grant = await _client.SendAsync(grantRequest);
+            Assert.Equal(System.Net.HttpStatusCode.Created, grant.StatusCode);
+        }
+
+        using var unauthorizedDeleteRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/documents/{document.Id}",
+            reader);
+        using var unauthorizedDelete = await _client.SendAsync(unauthorizedDeleteRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, unauthorizedDelete.StatusCode);
+
+        using var deleteRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/documents/{document.Id}",
+            owner);
+        using var deleted = await _client.SendAsync(deleteRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, deleted.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var storedDocument = await database.Documents
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == document.Id);
+        Assert.True(storedDocument.IsDeleted);
+        var grants = await database.DocumentGrants
+            .AsNoTracking()
+            .Where(grant => grant.DocumentId == document.Id)
+            .ToListAsync();
+        Assert.Equal(2, grants.Count);
+        Assert.All(grants, grant =>
+        {
+            Assert.NotNull(grant.RevokedAtUtc);
+            Assert.Equal("Document removed by owner", grant.RevocationReason);
+        });
+        Assert.Empty(await database.DocumentVersions
+            .AsNoTracking()
+            .Where(version => version.DocumentId == document.Id)
+            .ToListAsync());
+        var storageRoot = Environment.GetEnvironmentVariable("Storage__RootPath");
+        Assert.False(string.IsNullOrWhiteSpace(storageRoot));
+        Assert.All(
+            storageKeys,
+            storageKey => Assert.False(File.Exists(Path.Combine(storageRoot!, $"{storageKey}.pdf"))));
+        Assert.Contains(
+            await database.AuditEvents.AsNoTracking().Where(
+                auditEvent => auditEvent.DocumentId == document.Id).ToListAsync(),
+            auditEvent => auditEvent.Action == "document.delete"
+                && auditEvent.Result == TrustVault.Domain.Audit.AuditResult.Success);
+
+        foreach (var token in new[] { reader.AccessToken, editor.AccessToken })
+        {
+            using var downloadRequest = CreateAuthorizedRequest(
+                HttpMethod.Get,
+                $"/api/documents/{document.Id}/content",
+                token);
+            using var download = await _client.SendAsync(downloadRequest);
+            Assert.Equal(System.Net.HttpStatusCode.NotFound, download.StatusCode);
+        }
+
+        using var ownerDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            owner);
+        using var ownerDownload = await _client.SendAsync(ownerDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, ownerDownload.StatusCode);
     }
 
     [Fact]

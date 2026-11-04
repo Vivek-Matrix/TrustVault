@@ -7,6 +7,8 @@ export interface AuthSession {
   userId: string;
   email: string;
   roles: string[];
+  refreshToken?: string;
+  refreshTokenExpiresAtUtc?: string;
 }
 
 @Injectable({ providedIn: 'root' })

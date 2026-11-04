@@ -145,6 +145,12 @@ for production.
     Save the result, download it, and verify the covered area is black and the
     old file no longer appears in **Previous versions**. Do not treat this as
     secure deletion from backups or already-downloaded copies.
+11. Choose the clock icon on a document to view its creation, read, and edit
+    history, including who performed the action and when. Owners and users with
+    an active grant can view the history; revoked users cannot.
+12. As the owner, choose the trash icon to remove a document. Confirm the
+    warning to delete it and revoke every user's shared access. The document
+    and its previous versions become unavailable to everyone.
 
 Do not use real confidential files. The browser keeps the access token only in
 memory; refreshing or closing the page signs the user out. Use separate
@@ -215,9 +221,11 @@ replace text areas, redact, reorder/remove pages, or replace the PDF. Page edits
 are flattened to images, so text search, links, forms, signatures, and
 accessibility features are lost. Redaction clears app-accessible previous
 versions but cannot erase external backups or copies already downloaded.
-Complete PDF validation/malware scanning, refresh tokens, email
-verification, password recovery, user suspension management, production
-storage, and a restricted production DB role remain follow-up work. An endpoint
+Complete PDF validation/malware scanning, email verification, password
+recovery, user suspension management, production storage, and a restricted
+production DB role remain follow-up work. Refresh tokens are now issued,
+rotated, and revoked server-side, while the browser keeps the access token in
+memory only. An endpoint
 is not secure merely because its UI is hidden.
 
 ## First commit plan

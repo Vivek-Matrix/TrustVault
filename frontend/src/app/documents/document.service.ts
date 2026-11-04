@@ -1,7 +1,15 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
+
+export interface DocumentFilters {
+  search?: string;
+  category?: string;
+  owner?: string;
+  createdFrom?: string;
+  createdTo?: string;
+}
 
 export interface DocumentItem {
   id: string;
@@ -30,6 +38,14 @@ export interface DocumentVersionItem {
   createdAtUtc: string;
 }
 
+export interface DocumentAuditItem {
+  id: string;
+  actorEmail: string | null;
+  activity: 'CREATED' | 'READ' | 'EDITED';
+  result: 'SUCCESS' | 'DENIED';
+  timestampUtc: string;
+}
+
 export interface DocumentEditableText {
   text: string;
 }
@@ -39,8 +55,25 @@ export class DocumentService {
   private readonly http = inject(HttpClient);
   private readonly documentsUrl = `${environment.apiBaseUrl}/documents`;
 
-  list(): Observable<DocumentItem[]> {
-    return this.http.get<DocumentItem[]>(this.documentsUrl);
+  list(filters: DocumentFilters = {}): Observable<DocumentItem[]> {
+    let params = new HttpParams();
+    if (filters.search) {
+      params = params.set('search', filters.search);
+    }
+    if (filters.category) {
+      params = params.set('category', filters.category);
+    }
+    if (filters.owner) {
+      params = params.set('owner', filters.owner);
+    }
+    if (filters.createdFrom) {
+      params = params.set('createdFrom', filters.createdFrom);
+    }
+    if (filters.createdTo) {
+      params = params.set('createdTo', filters.createdTo);
+    }
+
+    return this.http.get<DocumentItem[]>(this.documentsUrl, { params });
   }
 
   upload(title: string, category: string, file: File): Observable<DocumentItem> {
@@ -63,6 +96,12 @@ export class DocumentService {
     );
   }
 
+  listAudits(documentId: string): Observable<DocumentAuditItem[]> {
+    return this.http.get<DocumentAuditItem[]>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/audits`,
+    );
+  }
+
   grantAccess(
     documentId: string,
     email: string,
@@ -78,6 +117,10 @@ export class DocumentService {
     return this.http.delete<void>(
       `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants/${encodeURIComponent(userId)}`,
     );
+  }
+
+  deleteDocument(documentId: string): Observable<void> {
+    return this.http.delete<void>(`${this.documentsUrl}/${encodeURIComponent(documentId)}`);
   }
 
   updateMetadata(

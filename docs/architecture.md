@@ -28,9 +28,9 @@ and the development OpenAPI document are explicit anonymous exceptions. The
 database readiness endpoint remains protected by the fallback policy. JWT
 validation requires a secret key supplied through configuration and rejects
 keys under 32 UTF-8 bytes. Registration assigns the Viewer role, and issued
-access tokens default to 15 minutes. Account suspension administration,
-revocation of already-issued tokens, and refresh-token rotation remain future
-work.
+access tokens default to 15 minutes. Refresh tokens are issued, hashed, rotated,
+and revoked server-side; account suspension administration and email
+verification remain future work.
 
 ## Data model
 

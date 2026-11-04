@@ -3,6 +3,7 @@ import { Component, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { finalize } from 'rxjs';
 import {
+  DocumentAuditItem,
   DocumentGrantItem,
   DocumentItem,
   DocumentService,
@@ -77,6 +78,35 @@ const maximumFileBytes = 10 * 1024 * 1024;
         </button>
       </form>
 
+      <form class="filter-form" [formGroup]="filtersForm" (ngSubmit)="applyFilters()" novalidate>
+        <div class="filter-grid">
+          <div>
+            <label for="document-search">Search</label>
+            <input id="document-search" formControlName="search" placeholder="Title, category, owner, filename" />
+          </div>
+          <div>
+            <label for="document-filter-category">Category</label>
+            <input id="document-filter-category" formControlName="category" placeholder="Category" />
+          </div>
+          <div>
+            <label for="document-filter-owner">Owner</label>
+            <input id="document-filter-owner" formControlName="owner" placeholder="Owner" />
+          </div>
+          <div>
+            <label for="document-filter-created-from">Created from</label>
+            <input id="document-filter-created-from" type="date" formControlName="createdFrom" />
+          </div>
+          <div>
+            <label for="document-filter-created-to">Created to</label>
+            <input id="document-filter-created-to" type="date" formControlName="createdTo" />
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button class="primary-button" type="submit">Apply filters</button>
+          <button class="secondary-button" type="button" (click)="clearFilters()">Clear</button>
+        </div>
+      </form>
+
       <div class="list-heading">
         <h3>Your and shared documents</h3>
         <span>{{ documents().length }} {{ documents().length === 1 ? 'file' : 'files' }}</span>
@@ -98,31 +128,82 @@ const maximumFileBytes = 10 * 1024 * 1024;
                 <button
                   class="secondary-button download-button"
                   type="button"
+                  [attr.aria-label]="downloadingId() === item.id ? 'Downloading document' : 'Download document'"
+                  [title]="downloadingId() === item.id ? 'Downloading...' : 'Download'"
                   [disabled]="downloadingId() === item.id"
                   (click)="downloadDocument(item)">
-                  {{ downloadingId() === item.id ? 'Downloading...' : 'Download' }}
+                  <span aria-hidden="true">{{ downloadingId() === item.id ? '…' : '↓' }}</span>
                 </button>
                 @if (canEdit(item)) {
                   <button
                     class="secondary-button edit-button"
                     type="button"
+                    aria-label="Edit document"
+                    title="Edit"
                     (click)="openEditor(item)">
-                    Edit
+                    <span aria-hidden="true">✎</span>
                   </button>
                 }
+                <button
+                  class="secondary-button audits-button"
+                  type="button"
+                  [attr.aria-expanded]="selectedAuditDocumentId() === item.id"
+                  aria-label="Audits"
+                  title="Audits"
+                  (click)="toggleAudits(item.id)">
+                  <span aria-hidden="true">◷</span>
+                </button>
                 @if (item.isOwner) {
+                  <button
+                    class="secondary-button remove-button"
+                    type="button"
+                    [disabled]="deletingId() === item.id"
+                    aria-label="Remove document"
+                    title="Remove document"
+                    (click)="removeDocument(item)">
+                    <span aria-hidden="true">{{ deletingId() === item.id ? '…' : '🗑' }}</span>
+                  </button>
                   <button
                     class="secondary-button access-button"
                     type="button"
                     [attr.aria-expanded]="selectedShareDocumentId() === item.id"
+                    [attr.aria-label]="selectedShareDocumentId() === item.id ? 'Close access management' : 'Manage access'"
+                    [title]="selectedShareDocumentId() === item.id ? 'Close access' : 'Manage access'"
                     (click)="toggleAccess(item.id)">
-                    {{ selectedShareDocumentId() === item.id ? 'Close access' : 'Manage access' }}
+                    <span aria-hidden="true">⇄</span>
                   </button>
                 } @else {
                   <span class="permission-badge">{{ item.permission }} access</span>
                 }
               </div>
             </li>
+            @if (selectedAuditDocumentId() === item.id) {
+              <li class="audit-panel">
+                <h4>Document activity</h4>
+                @if (auditsLoading()) {
+                  <p class="empty-state">Loading activity...</p>
+                } @else if (audits().length === 0) {
+                  <p class="empty-state">No document activity has been recorded yet.</p>
+                } @else {
+                  <ol class="audit-list">
+                    @for (audit of audits(); track audit.id) {
+                      <li class="audit-item">
+                        <strong>
+                          {{ audit.activity === 'CREATED' ? 'Created' : audit.activity === 'EDITED' ? 'Edited' : 'Read' }}
+                        </strong>
+                        <span>{{ audit.actorEmail ?? 'Unknown user' }}</span>
+                        <span
+                          class="audit-result"
+                          [class.denied]="audit.result === 'DENIED'">
+                          {{ audit.result === 'SUCCESS' ? 'Successful' : 'Denied' }}
+                        </span>
+                        <time [attr.datetime]="audit.timestampUtc">{{ formatAuditDate(audit.timestampUtc) }}</time>
+                      </li>
+                    }
+                  </ol>
+                }
+              </li>
+            }
             @if (item.isOwner && selectedShareDocumentId() === item.id) {
               <li class="access-panel">
                 <h4>People with access</h4>
@@ -201,7 +282,11 @@ export class DocumentsPanelComponent {
   readonly loading = signal(false);
   readonly uploading = signal(false);
   readonly downloadingId = signal<string | null>(null);
+  readonly deletingId = signal<string | null>(null);
   readonly selectedShareDocumentId = signal<string | null>(null);
+  readonly selectedAuditDocumentId = signal<string | null>(null);
+  readonly audits = signal<DocumentAuditItem[]>([]);
+  readonly auditsLoading = signal(false);
   readonly grants = signal<DocumentGrantItem[]>([]);
   readonly grantsLoading = signal(false);
   readonly grantSubmitting = signal(false);
@@ -211,6 +296,13 @@ export class DocumentsPanelComponent {
   readonly form = this.formBuilder.nonNullable.group({
     title: ['', [Validators.required, Validators.maxLength(200)]],
     category: ['', [Validators.required, Validators.maxLength(100)]],
+  });
+  readonly filtersForm = this.formBuilder.nonNullable.group({
+    search: [''],
+    category: [''],
+    owner: [''],
+    createdFrom: [''],
+    createdTo: [''],
   });
 
   constructor() {
@@ -243,11 +335,27 @@ export class DocumentsPanelComponent {
     this.selectedFile.set(file);
   }
 
+  applyFilters(): void {
+    this.refreshDocuments();
+  }
+
+  clearFilters(): void {
+    this.filtersForm.reset();
+    this.refreshDocuments();
+  }
+
   refreshDocuments(): void {
     this.loading.set(true);
     this.error.set(null);
+    const filters = this.filtersForm.getRawValue();
     this.documentService
-      .list()
+      .list({
+        search: filters.search?.trim() || undefined,
+        category: filters.category?.trim() || undefined,
+        owner: filters.owner?.trim() || undefined,
+        createdFrom: filters.createdFrom || undefined,
+        createdTo: filters.createdTo || undefined,
+      })
       .pipe(finalize(() => this.loading.set(false)))
       .subscribe({
         next: (documents) => this.documents.set(documents),
@@ -312,6 +420,45 @@ export class DocumentsPanelComponent {
       });
   }
 
+  removeDocument(item: DocumentItem): void {
+    if (
+      this.deletingId()
+      || !globalThis.confirm(
+        `Remove "${item.title}"? This will delete the document and revoke all access grants, so everyone you shared it with will lose access. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    this.message.set(null);
+    this.error.set(null);
+    this.deletingId.set(item.id);
+    this.documentService
+      .deleteDocument(item.id)
+      .pipe(finalize(() => this.deletingId.set(null)))
+      .subscribe({
+        next: () => {
+          this.documents.update((documents) =>
+            documents.filter((document) => document.id !== item.id),
+          );
+          if (this.selectedAuditDocumentId() === item.id) {
+            this.selectedAuditDocumentId.set(null);
+            this.audits.set([]);
+          }
+          if (this.selectedShareDocumentId() === item.id) {
+            this.selectedShareDocumentId.set(null);
+            this.grants.set([]);
+          }
+          if (this.editingDocument()?.id === item.id) {
+            this.editingDocument.set(null);
+          }
+          this.message.set(`"${item.title}" was removed and shared access was revoked.`);
+        },
+        error: (error: unknown) =>
+          this.error.set(this.describeError(error, 'remove this document')),
+      });
+  }
+
   toggleAccess(documentId: string): void {
     if (this.selectedShareDocumentId() === documentId) {
       this.selectedShareDocumentId.set(null);
@@ -321,6 +468,18 @@ export class DocumentsPanelComponent {
 
     this.selectedShareDocumentId.set(documentId);
     this.loadGrants(documentId);
+  }
+
+  toggleAudits(documentId: string): void {
+    if (this.selectedAuditDocumentId() === documentId) {
+      this.selectedAuditDocumentId.set(null);
+      this.audits.set([]);
+      return;
+    }
+
+    this.selectedAuditDocumentId.set(documentId);
+    this.audits.set([]);
+    this.loadAudits(documentId);
   }
 
   canEdit(item: DocumentItem): boolean {
@@ -423,6 +582,23 @@ export class DocumentsPanelComponent {
         error: (error: unknown) =>
           this.error.set(this.describeError(error, 'load document access')),
       });
+  }
+
+  private loadAudits(documentId: string): void {
+    this.auditsLoading.set(true);
+    this.error.set(null);
+    this.documentService
+      .listAudits(documentId)
+      .pipe(finalize(() => this.auditsLoading.set(false)))
+      .subscribe({
+        next: (audits) => this.audits.set(audits),
+        error: (error: unknown) =>
+          this.error.set(this.describeError(error, 'load document audits')),
+      });
+  }
+
+  formatAuditDate(timestampUtc: string): string {
+    return new Date(timestampUtc).toLocaleString();
   }
 
   formatSize(sizeBytes: number): string {

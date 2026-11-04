@@ -31,6 +31,10 @@ public sealed class AuthenticationService(
         int.TryParse(configuration["Jwt:AccessTokenLifetimeMinutes"], out var configuredLifetime)
             ? configuredLifetime
             : 15;
+    private readonly int _refreshTokenLifetimeDays =
+        int.TryParse(configuration["Jwt:RefreshTokenLifetimeDays"], out var configuredRefreshLifetime)
+            ? configuredRefreshLifetime
+            : 7;
     private readonly ApplicationUser _timingUser = new();
     private readonly string _dummyPasswordHash = userManager.PasswordHasher.HashPassword(
         new ApplicationUser(),
@@ -75,9 +79,12 @@ public sealed class AuthenticationService(
             return ValidationFailure(roleResult.Errors);
         }
 
-        await transaction.CommitAsync(cancellationToken);
         var roles = await userManager.GetRolesAsync(user);
-        return new RegistrationResult(CreateAuthenticationResponse(user, roles), EmptyErrors(), false);
+        var authResponse = CreateAuthenticationResponse(user, roles);
+        await SaveRefreshTokenAsync(user, authResponse.RefreshToken!, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+        return new RegistrationResult(authResponse, EmptyErrors(), false);
     }
 
     public async Task<AuthResponse?> LoginAsync(
@@ -112,7 +119,60 @@ public sealed class AuthenticationService(
         }
 
         var roles = await userManager.GetRolesAsync(user);
-        return CreateAuthenticationResponse(user, roles);
+        var authResponse = CreateAuthenticationResponse(user, roles);
+        await SaveRefreshTokenAsync(user, authResponse.RefreshToken!, cancellationToken);
+        return authResponse;
+    }
+
+    public async Task<AuthResponse?> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
+    {
+        var trimmedRefreshToken = refreshToken?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmedRefreshToken))
+        {
+            return null;
+        }
+
+        var user = await database.Users
+            .FirstOrDefaultAsync(user => user.RefreshTokenHash != null && user.RefreshTokenHash != string.Empty, cancellationToken);
+
+        if (user is null)
+        {
+            return null;
+        }
+
+        var tokenHash = HashToken(trimmedRefreshToken);
+        var candidate = await database.Users
+            .FirstOrDefaultAsync(
+                user => user.RefreshTokenHash == tokenHash
+                    && user.RefreshTokenExpiresAtUtc != null
+                    && user.RefreshTokenExpiresAtUtc > DateTimeOffset.UtcNow,
+                cancellationToken);
+
+        if (candidate is null || candidate.IsSuspended)
+        {
+            logger.LogWarning("Refresh token rejected for user with no valid active rotation token.");
+            return null;
+        }
+
+        var roles = await userManager.GetRolesAsync(candidate);
+        var authResponse = CreateAuthenticationResponse(candidate, roles);
+        await SaveRefreshTokenAsync(candidate, authResponse.RefreshToken!, cancellationToken);
+        return authResponse;
+    }
+
+    public async Task RevokeRefreshTokenAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var user = await database.Users
+            .SingleOrDefaultAsync(item => item.Id == userId, cancellationToken);
+        if (user is null)
+        {
+            return;
+        }
+
+        user.RefreshTokenHash = null;
+        user.RefreshTokenExpiresAtUtc = null;
+        user.RefreshTokenIssuedAtUtc = null;
+        await database.SaveChangesAsync(cancellationToken);
     }
 
     private async Task EnsureViewerRoleExistsAsync()
@@ -130,12 +190,37 @@ public sealed class AuthenticationService(
         }
     }
 
+    private async Task SaveRefreshTokenAsync(
+        ApplicationUser user,
+        string refreshToken,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        user.RefreshTokenHash = HashToken(refreshToken);
+        user.RefreshTokenIssuedAtUtc = now;
+        user.RefreshTokenExpiresAtUtc = now.AddDays(_refreshTokenLifetimeDays);
+        await database.SaveChangesAsync(cancellationToken);
+    }
+
+    private static string HashToken(string token)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        return Convert.ToHexString(hash);
+    }
+
+    private static string GenerateRefreshToken()
+    {
+        return Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
     private AuthResponse CreateAuthenticationResponse(
         ApplicationUser user,
         IEnumerable<string> roles)
     {
         var now = DateTimeOffset.UtcNow;
         var expiresAt = now.AddMinutes(_accessTokenLifetimeMinutes);
+        var refreshToken = GenerateRefreshToken();
+        var refreshTokenExpiresAt = now.AddDays(_refreshTokenLifetimeDays);
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
@@ -164,7 +249,9 @@ public sealed class AuthenticationService(
             expiresAt,
             user.Id.ToString(),
             user.Email ?? string.Empty,
-            roles.ToArray());
+            roles.ToArray(),
+            refreshToken,
+            refreshTokenExpiresAt);
     }
 
     private static RegistrationResult EmailConflict() =>

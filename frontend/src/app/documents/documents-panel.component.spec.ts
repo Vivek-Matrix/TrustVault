@@ -63,6 +63,71 @@ describe('DocumentsPanelComponent', () => {
     fixture.destroy();
   });
 
+  it('loads and displays document audit events from the Audits icon button', () => {
+    const fixture = TestBed.createComponent(DocumentsPanelComponent);
+    fixture.detectChanges();
+
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([documentItem]);
+    fixture.detectChanges();
+
+    const auditsButton = fixture.nativeElement.querySelector(
+      '.audits-button',
+    ) as HTMLButtonElement;
+    expect(auditsButton.getAttribute('aria-label')).toBe('Audits');
+    expect(auditsButton.textContent.trim()).toBe('◷');
+    auditsButton.click();
+
+    const request = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${documentItem.id}/audits`,
+    );
+    expect(request.request.method).toBe('GET');
+    request.flush([
+      {
+        id: 'audit-1',
+        actorEmail: 'owner@example.test',
+        activity: 'CREATED',
+        result: 'SUCCESS',
+        timestampUtc: '2026-11-03T10:15:00Z',
+      },
+    ]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Document activity');
+    expect(fixture.nativeElement.textContent).toContain('Created');
+    expect(fixture.nativeElement.textContent).toContain('owner@example.test');
+    expect(fixture.nativeElement.textContent).toContain('Successful');
+    expect(fixture.nativeElement.querySelector('.audit-item time')?.getAttribute('datetime'))
+      .toBe('2026-11-03T10:15:00Z');
+    fixture.destroy();
+  });
+
+  it('warns before removing a document and removes it after confirmation', () => {
+    const confirmSpy = spyOn(globalThis, 'confirm').and.returnValue(true);
+    const fixture = TestBed.createComponent(DocumentsPanelComponent);
+    fixture.detectChanges();
+
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([documentItem]);
+    fixture.detectChanges();
+    const removeButton = fixture.nativeElement.querySelector(
+      '.remove-button',
+    ) as HTMLButtonElement;
+    removeButton.click();
+
+    expect(confirmSpy).toHaveBeenCalledOnceWith(
+      'Remove "Test document"? This will delete the document and revoke all access grants, so everyone you shared it with will lose access. This cannot be undone.',
+    );
+    const request = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${documentItem.id}`,
+    );
+    expect(request.request.method).toBe('DELETE');
+    request.flush(null, { status: 204, statusText: 'No Content' });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.documents()).toEqual([]);
+    expect(fixture.componentInstance.message()).toContain('shared access was revoked');
+    fixture.destroy();
+  });
+
   it('uploads a PDF and adds the returned document to the list', () => {
     const fixture = TestBed.createComponent(DocumentsPanelComponent);
     const component = fixture.componentInstance;

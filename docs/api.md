@@ -10,7 +10,9 @@ anonymous. The browser's route guards are not an authorization boundary.
 | POST | `/api/documents` | Authenticated owner | Upload a supported file; ownership is taken from the signed-in identity |
 | GET | `/api/documents` | Owner or active grantee | List non-deleted documents owned by or shared with the caller |
 | GET | `/api/documents/{id}` | Owner or active grantee | Read metadata; other users receive 404 |
+| GET | `/api/documents/{id}/audits` | Owner or active grantee | View document creation, read, and edit activity with actor, result, and UTC timestamp |
 | GET | `/api/documents/{id}/content` | Owner or active grantee | Download the private file; other users receive 404 |
+| DELETE | `/api/documents/{id}` | Document owner | Remove the document, revoke every active grant, and delete current and previous stored content |
 | PUT | `/api/documents/{id}` | Owner or active EDIT grantee | Change title, description, and category |
 | GET | `/api/documents/{id}/editable-text` | Owner or active EDIT grantee | Read TXT or extracted Word text for editing |
 | PUT | `/api/documents/{id}/editable-text` | Owner or active EDIT grantee | Save TXT text or convert edited Word text to DOCX; preserves the previous version |
@@ -63,6 +65,10 @@ Database transactions serialize audit appends. This is not a claim of
 tamper-proof evidence: the local verifier checks the records currently present,
 but external anchoring and a production runtime database role unable to alter
 the schema are still missing.
+The document Audits control displays successful and denied creation/read/edit
+events with the actor's email and timestamp in the viewer's local time. Only
+the owner and users with an active document grant can view that history;
+revoking a grant also revokes audit-history access.
 Owners can share a document with another active registered account by email.
 Only the owner can list, create, or revoke grants. A grant is checked on every
 list, metadata, download, edit, and previous-version request; revocation
@@ -72,6 +78,11 @@ Word text, PDF pages, and current PDF file. Revoked grants remain in the
 database, and changing a permission revokes the prior grant and creates a new
 history row. Unknown and unauthorized document IDs return the same 404, while
 authenticated denied attempts are recorded.
+Removing a document is owner-only and requires confirmation in the UI. The
+document becomes unavailable immediately, all active grants are marked revoked,
+and current and previous stored content is deleted. The removal is retained in
+the audit history; if physical storage cleanup fails, the API reports an error
+and logs the failed cleanup for follow-up.
 
 The in-app editor can add text and strokes, cover an area and add replacement
 text, permanently black out an area, reorder pages, and remove pages. Saving

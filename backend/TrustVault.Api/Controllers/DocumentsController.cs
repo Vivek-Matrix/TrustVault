@@ -271,6 +271,11 @@ public sealed class DocumentsController(
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<DocumentResponse>>(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<DocumentResponse>>> List(
+        [FromQuery] string? search,
+        [FromQuery] string? category,
+        [FromQuery] string? owner,
+        [FromQuery] DateTime? createdFrom,
+        [FromQuery] DateTime? createdTo,
         CancellationToken cancellationToken)
     {
         if (!TryGetUserId(out var ownerId))
@@ -278,20 +283,74 @@ public sealed class DocumentsController(
             return Unauthorized();
         }
 
-        var documents = await database.Documents
+        var trimmedSearch = search?.Trim();
+        var trimmedCategory = category?.Trim();
+        var trimmedOwner = owner?.Trim();
+
+        var documentsQuery = database.Documents
             .AsNoTracking()
             .Where(document => !document.IsDeleted
                 && (document.OwnerId == ownerId
                     || document.Grants.Any(grant =>
                         grant.UserId == ownerId && grant.RevokedAtUtc == null)))
-            .OrderByDescending(document => document.CreatedAtUtc)
-            .Select(document => new
+            .Join(
+                database.Users.AsNoTracking(),
+                document => document.OwnerId,
+                user => user.Id,
+                (document, user) => new
+                {
+                    Document = document,
+                    OwnerEmail = user.Email ?? string.Empty,
+                    OwnerUserName = user.UserName ?? string.Empty
+                });
+
+        if (!string.IsNullOrWhiteSpace(trimmedSearch))
+        {
+            var searchValue = trimmedSearch;
+            documentsQuery = documentsQuery.Where(item =>
+                item.Document.Title.Contains(searchValue)
+                || item.Document.Category.Contains(searchValue)
+                || item.Document.OriginalFileName.Contains(searchValue)
+                || item.OwnerEmail.Contains(searchValue)
+                || item.OwnerUserName.Contains(searchValue));
+        }
+
+        if (!string.IsNullOrWhiteSpace(trimmedCategory))
+        {
+            var categoryValue = trimmedCategory;
+            documentsQuery = documentsQuery.Where(item =>
+                item.Document.Category.Contains(categoryValue));
+        }
+
+        if (!string.IsNullOrWhiteSpace(trimmedOwner))
+        {
+            var ownerValue = trimmedOwner;
+            documentsQuery = documentsQuery.Where(item =>
+                item.OwnerEmail.Contains(ownerValue)
+                || item.OwnerUserName.Contains(ownerValue));
+        }
+
+        if (createdFrom is not null)
+        {
+            documentsQuery = documentsQuery.Where(item => item.Document.CreatedAtUtc >= createdFrom.Value);
+        }
+
+        if (createdTo is not null)
+        {
+            documentsQuery = documentsQuery.Where(item => item.Document.CreatedAtUtc <= createdTo.Value);
+        }
+
+        var documents = await documentsQuery
+            .OrderByDescending(item => item.Document.CreatedAtUtc)
+            .Select(item => new
             {
-                Document = document,
-                IsOwner = document.OwnerId == ownerId,
-                Permission = document.OwnerId == ownerId
+                item.Document,
+                item.OwnerEmail,
+                item.OwnerUserName,
+                IsOwner = item.Document.OwnerId == ownerId,
+                Permission = item.Document.OwnerId == ownerId
                     ? null
-                    : document.Grants
+                    : item.Document.Grants
                         .Where(grant =>
                             grant.UserId == ownerId && grant.RevokedAtUtc == null)
                         .Select(grant => grant.Permission)
@@ -317,7 +376,14 @@ public sealed class DocumentsController(
             null,
             "document.list",
             AuditResult.Success,
-            "{}",
+            JsonSerializer.Serialize(new
+            {
+                search = trimmedSearch,
+                category = trimmedCategory,
+                owner = trimmedOwner,
+                createdFrom = createdFrom,
+                createdTo = createdTo
+            }),
             cancellationToken);
         return Ok(documents);
     }
@@ -352,6 +418,79 @@ public sealed class DocumentsController(
             "{}",
             cancellationToken);
         return Ok(ToResponse(document, document.OwnerId == ownerId, permission));
+    }
+
+    [HttpGet("{id:guid}/audits")]
+    [ProducesResponseType<IReadOnlyList<DocumentAuditResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<DocumentAuditResponse>>> GetAudits(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        if ((await FindReadableDocumentAsync(id, userId, cancellationToken)).Document is null)
+        {
+            await RecordDeniedAccessAsync(id, "document.audit.read", cancellationToken);
+            return NotFound();
+        }
+
+        var auditEvents = await database.AuditEvents
+            .AsNoTracking()
+            .Where(auditEvent => auditEvent.DocumentId == id
+                && (auditEvent.Action == "document.upload"
+                    || auditEvent.Action == "document.metadata.read"
+                    || auditEvent.Action == "document.download"
+                    || auditEvent.Action == "document.text.read"
+                    || auditEvent.Action == "document.versions.list"
+                    || auditEvent.Action == "document.version.download"
+                    || auditEvent.Action == "document.update"
+                    || auditEvent.Action == "document.text.update"
+                    || auditEvent.Action == "document.content.replace"))
+            .OrderByDescending(auditEvent => auditEvent.TimestampUtc)
+            .ThenByDescending(auditEvent => auditEvent.Id)
+            .Select(auditEvent => new
+            {
+                auditEvent.Id,
+                auditEvent.ActorUserId,
+                auditEvent.Action,
+                auditEvent.Result,
+                auditEvent.TimestampUtc
+            })
+            .ToListAsync(cancellationToken);
+
+        var actorIds = auditEvents
+            .Where(auditEvent => auditEvent.ActorUserId.HasValue)
+            .Select(auditEvent => auditEvent.ActorUserId!.Value)
+            .Distinct()
+            .ToArray();
+        var actorEmails = await database.Users
+            .AsNoTracking()
+            .Where(user => actorIds.Contains(user.Id))
+            .ToDictionaryAsync(user => user.Id, user => user.Email, cancellationToken);
+
+        var response = auditEvents
+            .Select(auditEvent => new DocumentAuditResponse(
+                auditEvent.Id,
+                auditEvent.ActorUserId is Guid actorId
+                    && actorEmails.TryGetValue(actorId, out var email)
+                        ? email
+                        : null,
+                auditEvent.Action == "document.upload"
+                    ? "CREATED"
+                    : auditEvent.Action is "document.update"
+                        or "document.text.update"
+                        or "document.content.replace"
+                        ? "EDITED"
+                        : "READ",
+                auditEvent.Result.ToString().ToUpperInvariant(),
+                auditEvent.TimestampUtc))
+            .ToArray();
+
+        return Ok(response);
     }
 
     [HttpGet("{id:guid}/content")]
@@ -605,6 +744,95 @@ public sealed class DocumentsController(
             JsonSerializer.Serialize(new { recipientUserId = userId }),
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteDocument(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var storageKeysToDelete = new List<string>();
+        await using (var transaction = await database.Database.BeginTransactionAsync(
+            cancellationToken))
+        {
+            await LockAuditChainAsync(cancellationToken);
+            var document = await database.Documents
+                .FirstOrDefaultAsync(
+                    item => item.Id == id && item.OwnerId == ownerId && !item.IsDeleted,
+                    cancellationToken);
+            if (document is null)
+            {
+                await RecordDeniedAccessAsync(id, "document.delete", cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return NotFound();
+            }
+
+            var versions = await database.DocumentVersions
+                .Where(version => version.DocumentId == id)
+                .ToListAsync(cancellationToken);
+            storageKeysToDelete.Add(document.StorageKey);
+            storageKeysToDelete.AddRange(versions.Select(version => version.StorageKey));
+            database.DocumentVersions.RemoveRange(versions);
+
+            var now = DateTime.UtcNow;
+            var activeGrants = await database.DocumentGrants
+                .Where(grant => grant.DocumentId == id && grant.RevokedAtUtc == null)
+                .ToListAsync(cancellationToken);
+            foreach (var grant in activeGrants)
+            {
+                grant.RevokedAtUtc = now;
+                grant.RevocationReason = "Document removed by owner";
+            }
+
+            document.IsDeleted = true;
+            document.UpdatedAtUtc = now;
+            await auditWriter.WriteAsync(
+                HttpContext,
+                id,
+                "document.delete",
+                AuditResult.Success,
+                JsonSerializer.Serialize(new
+                {
+                    revokedGrantCount = activeGrants.Count
+                }),
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        var storageCleanupFailed = false;
+        foreach (var storageKey in storageKeysToDelete.Distinct(StringComparer.Ordinal))
+        {
+            try
+            {
+                await storage.DeleteAsync(storageKey, CancellationToken.None);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                logger.LogError(
+                    exception,
+                    "Could not remove stored content for deleted document {DocumentId}.",
+                    id);
+                storageCleanupFailed = true;
+            }
+        }
+
+        if (storageCleanupFailed)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "The document was removed, but some stored file data could not be deleted.",
+                detail: "The document and its access grants are unavailable. Contact the application owner to complete storage cleanup.");
+        }
+
         return NoContent();
     }
 

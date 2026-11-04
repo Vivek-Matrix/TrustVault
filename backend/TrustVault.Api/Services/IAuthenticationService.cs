@@ -7,6 +7,10 @@ public interface IAuthenticationService
     Task<RegistrationResult> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken);
 
     Task<AuthResponse?> LoginAsync(LoginRequest request, CancellationToken cancellationToken);
+
+    Task<AuthResponse?> RefreshAsync(string refreshToken, CancellationToken cancellationToken);
+
+    Task RevokeRefreshTokenAsync(Guid userId, CancellationToken cancellationToken);
 }
 
 public sealed record RegistrationResult(

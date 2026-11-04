@@ -37,6 +37,7 @@ public sealed class ApplicationDbContext(
         builder.Entity<ApplicationUser>(entity =>
         {
             entity.Property(user => user.CreatedAtUtc).HasColumnType("timestamp with time zone");
+            entity.Property(user => user.RefreshTokenHash).HasMaxLength(128);
             entity.HasIndex(user => user.IsSuspended);
         });
 

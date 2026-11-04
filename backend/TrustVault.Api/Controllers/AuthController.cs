@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -62,5 +63,40 @@ public sealed class AuthController(IAuthenticationService authenticationService)
         }
 
         return Ok(response);
+    }
+
+    [HttpPost("refresh")]
+    [ProducesResponseType<AuthResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<AuthResponse>> Refresh(
+        [FromBody] RefreshRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await authenticationService.RefreshAsync(request.RefreshToken, cancellationToken);
+        if (response is null)
+        {
+            return Unauthorized(new ProblemDetails
+            {
+                Status = StatusCodes.Status401Unauthorized,
+                Title = "Refresh token is invalid or expired."
+            });
+        }
+
+        return Ok(response);
+    }
+
+    [HttpPost("logout")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Logout(CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized();
+        }
+
+        await authenticationService.RevokeRefreshTokenAsync(userId, cancellationToken);
+        return NoContent();
     }
 }
