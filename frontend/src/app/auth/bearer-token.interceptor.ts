@@ -5,10 +5,14 @@ import { AuthSessionStore } from './auth-session.store';
 
 export const bearerTokenInterceptor: HttpInterceptorFn = (request, next) => {
   const token = inject(AuthSessionStore).accessToken();
+  const anonymousAuthPaths = [
+    `${environment.apiBaseUrl}/auth/login`,
+    `${environment.apiBaseUrl}/auth/refresh`,
+  ];
   if (
     !token ||
     !request.url.startsWith(environment.apiBaseUrl) ||
-    request.url.startsWith(`${environment.apiBaseUrl}/auth/`)
+    anonymousAuthPaths.includes(request.url.split('?')[0])
   ) {
     return next(request);
   }

@@ -18,9 +18,9 @@ has open items:
 |---|---|---|
 | Solution, API, domain, infrastructure, migrator, tests, and Angular workspace exist | Done | The ASP.NET solution and Angular workspace are present. Authentication, document UI, owner-only document operations, and named-user sharing/revocation are implemented locally. |
 | Local PostgreSQL and initial schema/migration are defined | Done | Compose and the initial EF migration exist. The migrator applied migrations successfully to both the existing local database and a separate empty PostgreSQL database; the existing named volume was preserved. |
-| Authentication skeleton and deny-by-default boundary work | Partial | Registration/login, Viewer-only self-registration, short-lived JWTs, rotating/revocable refresh tokens, and protected-route tests exist. Email verification, account-management UI, suspension administration, and immediate revocation of already-issued access tokens remain open. |
+| Authentication skeleton and deny-by-default boundary work | Partial | Login, short-lived JWTs, rotating/revocable refresh tokens, admin-managed member creation/deactivation, and protected-route tests exist. Email verification and password recovery remain open. |
 | README and local run instructions exist | Done | Root README documents setup, verification, and known limitations. |
-| CI pipeline is green | Done | The owner reports the latest GitHub Actions workflow passed after the AuthController fix was committed and pushed. |
+| CI pipeline is green | Done | The owner confirmed Sprint 4 and Sprint 5 GitHub Actions workflows passed. Sprint 6 CI validation is pending. |
 | Seed script and sample users/documents exist | Not done | No seed script or demo accounts/documents are included. |
 | Secure deployment target exists | Not done | AWS is the selected provider and `ap-southeast-2` is the requested Region, but no AWS application resources or public deployment exist. The reported $100 credits are not a monthly spending cap. |
 | AWS Agent Toolkit is usable with the project's AWS profile | Partial | AWS CLI v2 and `uv` are installed, `trustvault-dev` sign-in succeeded, and the skill catalog returned 119 skills. The setup wizard was not run because the workspace already has a remote HTTP AWS MCP endpoint that must not be overwritten. See [deployment prerequisites](./deployment.md#aws-agent-toolkit-setup). |
@@ -32,15 +32,16 @@ production-ready.
 
 ## Sprint 1 progress
 
-The TV-002 authentication slice is complete: account registration, password
-login, short-lived JWTs, default Viewer role, failed-login lockout, IP-based
-request limiting, and a minimal Angular sign-in/register interface. The owner
-manually verified registration, sign-out, and sign-in in the local browser.
+The TV-002 authentication slice originally delivered account registration,
+password login, short-lived JWTs, default Viewer role, failed-login lockout,
+IP-based request limiting, and a minimal Angular sign-in/register interface.
+Sprint 6 later disabled public registration and replaced the account creation
+flow with administrator-managed members.
 Refresh-token rotation and revocation were added in a later increment and have
-automated coverage. All local checks passed, and the owner reports that all
-GitHub Actions CI checks passed. Suspension administration, revocation of
-already-issued access tokens, email verification, and authentication security
-event auditing remain open.
+automated coverage. Sprint 6 now disables public registration and provides
+administrator-managed member creation/deactivation with immediate token
+invalidation. Email verification, password recovery, and authentication
+security event auditing remain open.
 
 ### Sprint 2 progress: secure document lifecycle and named-user access
 
@@ -195,7 +196,7 @@ code.
 2. CI provisions both roles, runs migrations with the migrator credential, and
    runs API integration tests with the restricted runtime credential.
 3. Representative authenticated flows still succeed under the runtime role:
-   registration/login/refresh/logout, document upload/read/edit/delete,
+   admin bootstrap/member creation/login/refresh/logout, document upload/read/edit/delete,
    grant/revoke, version access, and audit append/read/verification.
 4. Database-level tests using the runtime role prove schema/table DDL and
    audit-event UPDATE, DELETE, and TRUNCATE are rejected; the runtime role is
@@ -218,8 +219,8 @@ rewrite the database, and external anchoring remains a separate follow-up.
 
 ### Sprint 5: private document pipeline
 
-**Status:** Implemented locally; Sprint 5 changes still require CI validation.
-No cloud resources were provisioned.
+**Status:** Implemented and CI successful (owner confirmed). No cloud resources
+were provisioned.
 
 **Goal:** Keep private files unavailable until a scanner returns a clean
 verdict, and ensure failures remain visible and retryable without changing
@@ -246,6 +247,40 @@ candidate replacement safety, authorization, deletion/revocation, and audit
 status. Backend tests, frontend lint/tests/build, migrations, and container
 build must pass. Do not use real confidential documents.
 
+### Sprint 6: administrator-managed member accounts
+
+**Status:** Implemented locally; CI validation pending. No cloud resources were
+provisioned.
+
+**Goal:** Only the sole bootstrap Administrator can add or remove members, and
+removal immediately invalidates all previously issued credentials without
+destroying document or audit history.
+
+- Disable public self-registration. Bootstrap one Administrator from protected
+  `AdminBootstrap:Email` and `AdminBootstrap:Password` configuration; never
+  commit or send the bootstrap password in chat.
+- The Administrator creates members by email only; every new account receives
+  the `Viewer` base role automatically, and submitted role values are ignored.
+  Document ownership is assigned to the uploader per document; owners manage
+  document-specific `READ` and `EDIT` grants. Return a strong temporary
+  password once and require a password change before the new member can access
+  any other API.
+- Deactivate member accounts rather than deleting their identity row. Revoke
+  refresh tokens, invalidate access tokens on the next request, revoke active
+  grants involving the removed member and their owned documents, and preserve
+  documents and audit records. Re-adding a deactivated email reactivates the
+  same identity with a new temporary password; old grants stay revoked.
+- Record account creation and deactivation in the existing append-only audit
+  chain. Keep document authorization per-owner/grant; the Administrator does
+  not gain document access by role.
+
+**Definition of done:** API and UI tests prove registration is unavailable,
+non-administrators cannot manage members, administrator role cannot be
+assigned, temporary passwords must be changed, removed users' existing access
+and refresh tokens fail immediately, and member document/audit history is
+preserved. Build, backend tests, frontend lint/tests/build, migration checks,
+and CI must pass.
+
 ### Remaining-gap roadmap
 
 The order below makes each stage a prerequisite or release gate for the next;
@@ -254,23 +289,28 @@ it is a planning sequence, not a promise that every item fits in one sprint.
 1. **Sprint 4 — Database access hardening (implemented; CI successful).**
    Separate runtime and migration credentials, verify least privilege in
    local/CI PostgreSQL, and retain migration/upgrade coverage.
-2. **Sprint 5 — Private document pipeline (implemented locally; CI pending).**
+2. **Sprint 5 — Private document pipeline (implemented; CI successful).**
    Persist per-document/version scan state; scan with local ClamAV; block access
    unless clean; provide owner retries; preserve old clean content if a new
    candidate scan fails. Choose durable production storage and scanning services
    only during a separately reviewed design step.
-3. **Identity and audit assurance.** Add email verification, password
-   recovery, administrative suspension and an explicit policy for already
-   issued access-token revocation. Independently anchor audit-chain checkpoints
+3. **Sprint 6 — Administrator-managed member accounts (implemented locally;
+   CI pending).** Disable public account creation; bootstrap one administrator;
+   allow only that administrator to create Viewer-default members without role
+   selection and deactivate them; assign document ownership to uploaders,
+   require a temporary-password change, and immediately revoke access when a
+   member is removed.
+4. **Remaining identity and audit assurance.** Add email verification and
+   password recovery. Independently anchor audit-chain checkpoints
    outside the application database's administrative boundary; prove that
    altered, removed, or rewritten history is detected without claiming that a
    database-only hash chain is tamper-proof.
-4. **Deployment design and approval gate.** Confirm the project Region in AWS
+5. **Deployment design and approval gate.** Confirm the project Region in AWS
    Settings, spend limit and billing status, service eligibility, networking,
    backup/restore expectations, and a complete cost estimate. Keep Regional
    resources in `ap-southeast-2`. No provisioning begins before the design and
    expected recurring costs are approved.
-5. **Production deployment and operations.** Publish an immutable CI image and
+6. **Production deployment and operations.** Publish an immutable CI image and
    deploy only after the preceding security gates pass. Isolate the API,
    database, and constrained Word converter; inject runtime/migrator secrets
    separately; configure HTTPS, health checks, alerts, backups, restore

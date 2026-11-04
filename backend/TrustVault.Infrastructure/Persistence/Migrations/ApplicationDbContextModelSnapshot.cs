@@ -419,6 +419,9 @@ namespace TrustVault.Infrastructure.Persistence.Migrations
                     b.Property<bool>("EmailConfirmed")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("IsPrimaryAdministrator")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("IsSuspended")
                         .HasColumnType("boolean");
 
@@ -427,6 +430,9 @@ namespace TrustVault.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("LockoutEnd")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("NormalizedEmail")
                         .HasMaxLength(256)
@@ -466,6 +472,10 @@ namespace TrustVault.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(256)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("IsPrimaryAdministrator")
+                        .IsUnique()
+                        .HasFilter("\"IsPrimaryAdministrator\" = TRUE");
 
                     b.HasIndex("IsSuspended");
 

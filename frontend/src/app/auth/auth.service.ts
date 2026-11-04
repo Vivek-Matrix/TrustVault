@@ -12,25 +12,22 @@ export class AuthService {
 
   readonly session = this.sessionStore.session;
 
-  register(email: string, password: string): Observable<AuthSession> {
-    return this.authenticate('register', email, password);
+  login(email: string, password: string): Observable<AuthSession> {
+    return this.http
+      .post<AuthSession>(`${this.authUrl}/login`, { email, password })
+      .pipe(tap((session) => this.sessionStore.setSession(session)));
   }
 
-  login(email: string, password: string): Observable<AuthSession> {
-    return this.authenticate('login', email, password);
+  changePassword(currentPassword: string, newPassword: string): Observable<AuthSession> {
+    return this.http
+      .post<AuthSession>(`${this.authUrl}/change-password`, {
+        currentPassword,
+        newPassword,
+      })
+      .pipe(tap((session) => this.sessionStore.setSession(session)));
   }
 
   logout(): void {
     this.sessionStore.clear();
-  }
-
-  private authenticate(
-    endpoint: 'register' | 'login',
-    email: string,
-    password: string,
-  ): Observable<AuthSession> {
-    return this.http
-      .post<AuthSession>(`${this.authUrl}/${endpoint}`, { email, password })
-      .pipe(tap((session) => this.sessionStore.setSession(session)));
   }
 }

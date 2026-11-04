@@ -39,6 +39,9 @@ public sealed class ApplicationDbContext(
             entity.Property(user => user.CreatedAtUtc).HasColumnType("timestamp with time zone");
             entity.Property(user => user.RefreshTokenHash).HasMaxLength(128);
             entity.HasIndex(user => user.IsSuspended);
+            entity.HasIndex(user => user.IsPrimaryAdministrator)
+                .IsUnique()
+                .HasFilter("\"IsPrimaryAdministrator\" = TRUE");
         });
 
         builder.Entity<Document>(entity =>

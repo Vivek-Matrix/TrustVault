@@ -216,3 +216,25 @@ written; the repository now has an `origin` remote.
   appears with its **Revoke** control.
 - **Validation:** All 32 backend tests, all 13 frontend tests, and .NET format
   verification pass.
+
+## 2026-11-04 — Administrator-managed member accounts
+
+- **Asked:** Read the original TrustVault brief and implement a sole
+  Administrator role that adds/removes members, with no public account creation.
+- **Produced:** Disabled public registration, bootstrapped one Administrator
+  from protected configuration, added Administrator-only member APIs/UI,
+  Viewer-default member creation (document ownership is per document),
+  one-time temporary passwords with forced
+  change, account deactivation, immediate access/refresh-token revocation,
+  grant revocation, and account lifecycle audit events.
+- **What needed correction:** The first integration run exhausted the test
+  host's 100-request authentication limit because new member setup correctly
+  goes through admin login for each test. Three API tests were rate-limited;
+  this was test configuration, not a production limit or authorization failure.
+- **What I did instead:** Raised the test-only authentication limit to 1000 and
+  reran the isolated PostgreSQL-backed suite; all 72 backend tests pass.
+  Solution build, EF migration consistency, frontend lint, all 20 frontend tests,
+  production frontend build, and `git diff --check` pass. The existing local
+  database was not changed; tests used a separately created temporary database.
+- **Commit:** Pending; record the commit reference after the changes are
+  committed.

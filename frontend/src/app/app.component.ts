@@ -5,16 +5,17 @@ import { RouterOutlet } from '@angular/router';
 import { finalize } from 'rxjs';
 import { AuthService } from './auth/auth.service';
 import { DocumentsPanelComponent } from './documents/documents-panel.component';
+import { AdminMembersComponent } from './admin/admin-members.component';
 
 @Component({
   selector: 'app-root',
-  imports: [DocumentsPanelComponent, RouterOutlet, ReactiveFormsModule],
+  imports: [AdminMembersComponent, DocumentsPanelComponent, RouterOutlet, ReactiveFormsModule],
   template: `
     <main>
       <header class="brand">
         <p class="eyebrow">PRIVATE DOCUMENT SHARING</p>
         <h1>{{ title }}</h1>
-        <p>Access starts with a verified account and server-issued credentials.</p>
+        <p>Accounts are managed by the TrustVault administrator.</p>
       </header>
 
       @if (auth.session(); as session) {
@@ -26,33 +27,51 @@ import { DocumentsPanelComponent } from './documents/documents-panel.component';
           <p class="session-note">
             This session stays in memory and ends when you sign out or close this page.
           </p>
-          <app-documents-panel />
+          @if (session.passwordChangeRequired) {
+            <section aria-labelledby="change-password-heading">
+              <h3 id="change-password-heading">Set your password</h3>
+              <p>Your administrator-issued temporary password must be changed before continuing.</p>
+              <p class="security-note">
+                Choose at least 12 characters with uppercase and lowercase letters, a number,
+                and a symbol.
+              </p>
+              @if (passwordChangeMessage()) {
+                <p class="form-message" role="alert">{{ passwordChangeMessage() }}</p>
+              }
+              <form [formGroup]="passwordChangeForm" (ngSubmit)="changePassword()" novalidate>
+                <label for="current-password">Temporary password</label>
+                <input id="current-password" type="password" autocomplete="current-password"
+                  formControlName="currentPassword" />
+                <label for="new-password">New password</label>
+                <input id="new-password" type="password" autocomplete="new-password"
+                  formControlName="newPassword" />
+                @if (passwordChangeForm.controls.newPassword.touched
+                  && passwordChangeForm.controls.newPassword.invalid) {
+                  <span class="field-error">
+                    The new password must meet all of the requirements above.
+                  </span>
+                }
+                <label for="confirm-password">Confirm new password</label>
+                <input id="confirm-password" type="password" autocomplete="new-password"
+                  formControlName="confirmPassword" />
+                <button class="primary-button" type="submit"
+                  [disabled]="passwordChangeForm.invalid || submittingPasswordChange()">
+                  {{ submittingPasswordChange() ? 'Please wait...' : 'Change password' }}
+                </button>
+              </form>
+            </section>
+          } @else if (session.roles.includes('Administrator')) {
+            <app-admin-members />
+          } @else {
+            <app-documents-panel />
+          }
           <button class="secondary-button" type="button" (click)="logout()">Sign out</button>
         </section>
       } @else {
         <section class="auth-card" aria-labelledby="auth-heading">
-          <div class="mode-switch" aria-label="Account action">
-            <button
-              type="button"
-              [class.selected]="mode() === 'login'"
-              [attr.aria-pressed]="mode() === 'login'"
-              (click)="setMode('login')">
-              Sign in
-            </button>
-            <button
-              type="button"
-              [class.selected]="mode() === 'register'"
-              [attr.aria-pressed]="mode() === 'register'"
-              (click)="setMode('register')">
-              Create account
-            </button>
-          </div>
-
-          <h2 id="auth-heading">{{ mode() === 'register' ? 'Create your account' : 'Welcome back' }}</h2>
+          <h2 id="auth-heading">Welcome back</h2>
           <p class="intro">
-            {{ mode() === 'register'
-              ? 'New accounts start with Viewer access.'
-              : 'Sign in to continue to your secure workspace.' }}
+            Sign in with credentials provided by your administrator.
           </p>
 
           @if (message()) {
@@ -70,21 +89,14 @@ import { DocumentsPanelComponent } from './documents/documents-panel.component';
             <input
               id="password"
               type="password"
-              [attr.autocomplete]="mode() === 'register' ? 'new-password' : 'current-password'"
+              autocomplete="current-password"
               formControlName="password" />
-            @if (mode() === 'register') {
-              <span class="field-hint">Use at least 12 characters with upper/lowercase letters, a number, and a symbol.</span>
-            }
             @if (form.controls.password.touched && form.controls.password.invalid) {
-              <span class="field-error">Enter a password that meets the requirements.</span>
+              <span class="field-error">Enter your password.</span>
             }
 
             <button class="primary-button" type="submit" [disabled]="form.invalid || submitting()">
-              {{ submitting()
-                ? 'Please wait...'
-                : mode() === 'register'
-                  ? 'Create account'
-                  : 'Sign in' }}
+              {{ submitting() ? 'Please wait...' : 'Sign in' }}
             </button>
           </form>
 
@@ -104,24 +116,27 @@ export class AppComponent {
   private readonly formBuilder = inject(FormBuilder);
   readonly auth = inject(AuthService);
   readonly title = 'TrustVault';
-  readonly mode = signal<'login' | 'register'>('register');
   readonly message = signal<string | null>(null);
   readonly submitting = signal(false);
+  readonly passwordChangeMessage = signal<string | null>(null);
+  readonly submittingPasswordChange = signal(false);
   readonly form = this.formBuilder.nonNullable.group({
     email: ['', [Validators.required, Validators.email, Validators.maxLength(256)]],
     password: ['', [Validators.required, Validators.maxLength(128)]],
   });
-
-  constructor() {
-    this.updatePasswordValidators();
-  }
-
-  setMode(mode: 'login' | 'register'): void {
-    this.mode.set(mode);
-    this.message.set(null);
-    this.form.controls.password.reset();
-    this.updatePasswordValidators();
-  }
+  readonly passwordChangeForm = this.formBuilder.nonNullable.group({
+    currentPassword: ['', [Validators.required, Validators.maxLength(128)]],
+    newPassword: [
+      '',
+      [
+        Validators.required,
+        Validators.minLength(12),
+        Validators.maxLength(128),
+        Validators.pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z0-9]).+$/),
+      ],
+    ],
+    confirmPassword: ['', [Validators.required, Validators.minLength(12), Validators.maxLength(128)]],
+  });
 
   submit(): void {
     this.form.markAllAsTouched();
@@ -132,15 +147,35 @@ export class AppComponent {
     this.message.set(null);
     this.submitting.set(true);
     const { email, password } = this.form.getRawValue();
-    const operation = this.mode() === 'register'
-      ? this.auth.register(email, password)
-      : this.auth.login(email, password);
-
-    operation
+    this.auth.login(email, password)
       .pipe(finalize(() => this.submitting.set(false)))
       .subscribe({
         next: () => this.form.controls.password.reset(),
         error: (error: unknown) => this.message.set(this.describeError(error)),
+      });
+  }
+
+  changePassword(): void {
+    this.passwordChangeForm.markAllAsTouched();
+    if (this.passwordChangeForm.invalid || this.submittingPasswordChange()) {
+      return;
+    }
+
+    const { currentPassword, newPassword, confirmPassword } =
+      this.passwordChangeForm.getRawValue();
+    if (newPassword !== confirmPassword) {
+      this.passwordChangeMessage.set('The new passwords do not match.');
+      return;
+    }
+
+    this.passwordChangeMessage.set(null);
+    this.submittingPasswordChange.set(true);
+    this.auth.changePassword(currentPassword, newPassword)
+      .pipe(finalize(() => this.submittingPasswordChange.set(false)))
+      .subscribe({
+        next: () => this.passwordChangeForm.reset(),
+        error: (error: unknown) =>
+          this.passwordChangeMessage.set(this.describePasswordChangeError(error)),
       });
   }
 
@@ -158,24 +193,45 @@ export class AppComponent {
     if (error.status === 401) {
       return 'Invalid email or password.';
     }
-    if (error.status === 409) {
-      return 'An account with this email already exists. Sign in instead.';
-    }
     if (error.status === 429) {
       return 'Too many attempts. Wait a minute before trying again.';
     }
     if (error.status === 400) {
-      return 'The email or password does not meet the requirements.';
+      return 'The password could not be changed. Verify the temporary password and new password requirements.';
     }
     return 'The request could not be completed. Try again later.';
   }
 
-  private updatePasswordValidators(): void {
-    const validators = [Validators.required, Validators.maxLength(128)];
-    if (this.mode() === 'register') {
-      validators.push(Validators.minLength(12));
+  private describePasswordChangeError(error: unknown): string {
+    if (!(error instanceof HttpErrorResponse)) {
+      return 'Unable to reach the service. Check your connection and try again.';
     }
-    this.form.controls.password.setValidators(validators);
-    this.form.controls.password.updateValueAndValidity();
+
+    if (error.status === 401) {
+      return 'Your temporary password was not accepted, or your session expired. Sign out and sign in again.';
+    }
+
+    if (error.status === 400) {
+      const body: unknown = error.error;
+      if (typeof body === 'object' && body !== null && 'errors' in body) {
+        const errors = body.errors;
+        if (typeof errors === 'object' && errors !== null) {
+          const messages = Object.values(errors)
+            .flatMap((value) => Array.isArray(value) ? value : [])
+            .filter((value): value is string => typeof value === 'string');
+          if (messages.length > 0) {
+            return messages.join(' ');
+          }
+        }
+      }
+
+      return 'The new password was rejected. Check the password requirements and try again.';
+    }
+
+    if (error.status === 429) {
+      return 'Too many attempts. Wait a minute before trying again.';
+    }
+    return 'The password could not be changed. Try again later.';
   }
+
 }

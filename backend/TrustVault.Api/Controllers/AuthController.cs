@@ -13,38 +13,6 @@ namespace TrustVault.Api.Controllers;
 [Authorize]
 public sealed class AuthController(IAuthenticationService authenticationService) : ControllerBase
 {
-    /// <summary>Creates a Viewer account and returns its initial access token.</summary>
-    [AllowAnonymous]
-    [HttpPost("register")]
-    [ProducesResponseType<AuthResponse>(StatusCodes.Status201Created)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
-    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> Register(
-        RegisterRequest request,
-        CancellationToken cancellationToken)
-    {
-        var result = await authenticationService.RegisterAsync(request, cancellationToken);
-        if (result.EmailAlreadyExists)
-        {
-            return Conflict(new ProblemDetails
-            {
-                Status = StatusCodes.Status409Conflict,
-                Title = "An account with this email already exists."
-            });
-        }
-
-        if (result.Authentication is null)
-        {
-            return BadRequest(new ValidationProblemDetails(
-                new Dictionary<string, string[]>(result.Errors))
-            {
-                Status = StatusCodes.Status400BadRequest
-            });
-        }
-
-        return Created("/api/system/whoami", result.Authentication);
-    }
-
     /// <summary>Authenticates an account and returns a short-lived access token.</summary>
     [AllowAnonymous]
     [HttpPost("login")]
@@ -65,6 +33,40 @@ public sealed class AuthController(IAuthenticationService authenticationService)
         }
 
         return Ok(response);
+    }
+
+    [HttpPost("change-password")]
+    [ProducesResponseType<AuthResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ChangePassword(
+        ChangePasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var result = await authenticationService.ChangePasswordAsync(
+            userId,
+            request,
+            cancellationToken);
+        if (result.Authentication is null)
+        {
+            if (result.Errors.Count == 0)
+            {
+                return Unauthorized();
+            }
+
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>(result.Errors))
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        return Ok(result.Authentication);
     }
 
     [AllowAnonymous]

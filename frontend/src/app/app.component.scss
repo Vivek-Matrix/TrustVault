@@ -41,33 +41,6 @@ footer {
   max-width: 48rem;
 }
 
-.mode-switch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.35rem;
-  margin-bottom: 1.75rem;
-  padding: 0.3rem;
-  border-radius: 0.75rem;
-  background: #f2f5f8;
-}
-
-.mode-switch button {
-  border: 0;
-  border-radius: 0.55rem;
-  background: transparent;
-  color: #526178;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 600;
-  padding: 0.7rem 0.8rem;
-}
-
-.mode-switch button.selected {
-  background: #fff;
-  color: #183b67;
-  box-shadow: 0 1px 3px #183b6714;
-}
-
 h2 {
   margin: 0;
   color: #183b67;
@@ -90,7 +63,8 @@ label {
   font-weight: 600;
 }
 
-input {
+input,
+select {
   box-sizing: border-box;
   width: 100%;
   min-height: 2.9rem;
@@ -101,12 +75,12 @@ input {
   font: inherit;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: #337f76;
   outline: 3px solid #337f7626;
 }
 
-.field-hint,
 .field-error {
   margin-top: 0.4rem;
   font-size: 0.8rem;

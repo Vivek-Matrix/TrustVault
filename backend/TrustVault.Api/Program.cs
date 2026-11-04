@@ -1,4 +1,5 @@
 using System.Text;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -126,6 +127,49 @@ builder.Services
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(30)
         };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var userIdClaim = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+                var tokenSecurityStamp =
+                    context.Principal?.FindFirstValue("security_stamp");
+                if (!Guid.TryParse(userIdClaim, out var userId)
+                    || string.IsNullOrWhiteSpace(tokenSecurityStamp))
+                {
+                    context.Fail("The access token is missing required account claims.");
+                    return;
+                }
+
+                var database = context.HttpContext.RequestServices
+                    .GetRequiredService<ApplicationDbContext>();
+                var account = await database.Users
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        user => user.Id == userId,
+                        context.HttpContext.RequestAborted);
+                if (account is null
+                    || account.IsSuspended
+                    || !string.Equals(
+                        account.SecurityStamp,
+                        tokenSecurityStamp,
+                        StringComparison.Ordinal))
+                {
+                    context.Fail("The account is inactive or its access token has been revoked.");
+                    return;
+                }
+
+                var passwordChangeRequest =
+                    HttpMethods.IsPost(context.Request.Method)
+                    && context.Request.Path.Equals(
+                        "/api/auth/change-password",
+                        StringComparison.OrdinalIgnoreCase);
+                if (account.MustChangePassword && !passwordChangeRequest)
+                {
+                    context.Fail("The account must change its temporary password.");
+                }
+            }
+        };
     });
 builder.Services.AddAuthorization(options =>
 {
@@ -141,6 +185,7 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(frontendOrigin).AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
+await AdministratorBootstrapper.InitializeAsync(app.Services, builder.Configuration);
 
 app.UseExceptionHandler();
 app.UseDefaultFiles();

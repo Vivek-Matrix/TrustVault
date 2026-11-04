@@ -15,7 +15,6 @@ namespace TrustVault.Api.Services;
 public sealed class AuthenticationService(
     UserManager<ApplicationUser> userManager,
     SignInManager<ApplicationUser> signInManager,
-    RoleManager<IdentityRole<Guid>> roleManager,
     ApplicationDbContext database,
     IConfiguration configuration,
     ILogger<AuthenticationService> logger) : IAuthenticationService
@@ -39,53 +38,6 @@ public sealed class AuthenticationService(
     private readonly string _dummyPasswordHash = userManager.PasswordHasher.HashPassword(
         new ApplicationUser(),
         Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
-
-    public async Task<RegistrationResult> RegisterAsync(
-        RegisterRequest request,
-        CancellationToken cancellationToken)
-    {
-        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-
-        var email = request.Email.Trim();
-        if (await userManager.FindByEmailAsync(email) is not null)
-        {
-            return EmailConflict();
-        }
-
-        await EnsureViewerRoleExistsAsync();
-
-        var user = new ApplicationUser
-        {
-            UserName = email,
-            Email = email,
-            CreatedAtUtc = DateTime.UtcNow
-        };
-        var createResult = await userManager.CreateAsync(user, request.Password);
-        if (!createResult.Succeeded)
-        {
-            if (createResult.Errors.Any(error =>
-                    error.Code is nameof(IdentityErrorDescriber.DuplicateEmail)
-                        or nameof(IdentityErrorDescriber.DuplicateUserName)))
-            {
-                return EmailConflict();
-            }
-
-            return ValidationFailure(createResult.Errors);
-        }
-
-        var roleResult = await userManager.AddToRoleAsync(user, UserRoles.Viewer);
-        if (!roleResult.Succeeded)
-        {
-            return ValidationFailure(roleResult.Errors);
-        }
-
-        var roles = await userManager.GetRolesAsync(user);
-        var authResponse = CreateAuthenticationResponse(user, roles);
-        await SaveRefreshTokenAsync(user, authResponse.RefreshToken!, cancellationToken);
-
-        await transaction.CommitAsync(cancellationToken);
-        return new RegistrationResult(authResponse, EmptyErrors(), false);
-    }
 
     public async Task<AuthResponse?> LoginAsync(
         LoginRequest request,
@@ -122,6 +74,42 @@ public sealed class AuthenticationService(
         var authResponse = CreateAuthenticationResponse(user, roles);
         await SaveRefreshTokenAsync(user, authResponse.RefreshToken!, cancellationToken);
         return authResponse;
+    }
+
+    public async Task<(AuthResponse? Authentication, IReadOnlyDictionary<string, string[]> Errors)>
+        ChangePasswordAsync(
+            Guid userId,
+            ChangePasswordRequest request,
+            CancellationToken cancellationToken)
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        var user = await userManager.FindByIdAsync(userId.ToString());
+        if (user is null || user.IsSuspended)
+        {
+            return (null, EmptyErrors());
+        }
+
+        var changeResult = await userManager.ChangePasswordAsync(
+            user,
+            request.CurrentPassword,
+            request.NewPassword);
+        if (!changeResult.Succeeded)
+        {
+            return (null, ValidationFailure(changeResult.Errors));
+        }
+
+        user.MustChangePassword = false;
+        var updateResult = await userManager.UpdateAsync(user);
+        if (!updateResult.Succeeded)
+        {
+            return (null, ValidationFailure(updateResult.Errors));
+        }
+
+        var roles = await userManager.GetRolesAsync(user);
+        var authentication = CreateAuthenticationResponse(user, roles);
+        await SaveRefreshTokenAsync(user, authentication.RefreshToken!, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return (authentication, EmptyErrors());
     }
 
     public async Task<AuthResponse?> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
@@ -172,22 +160,8 @@ public sealed class AuthenticationService(
         user.RefreshTokenHash = null;
         user.RefreshTokenExpiresAtUtc = null;
         user.RefreshTokenIssuedAtUtc = null;
+        user.SecurityStamp = Guid.NewGuid().ToString();
         await database.SaveChangesAsync(cancellationToken);
-    }
-
-    private async Task EnsureViewerRoleExistsAsync()
-    {
-        if (await roleManager.RoleExistsAsync(UserRoles.Viewer))
-        {
-            return;
-        }
-
-        var result = await roleManager.CreateAsync(new IdentityRole<Guid>(UserRoles.Viewer));
-        if (!result.Succeeded && !await roleManager.RoleExistsAsync(UserRoles.Viewer))
-        {
-            throw new InvalidOperationException(
-                $"Unable to initialize the default user role: {string.Join("; ", result.Errors.Select(error => error.Code))}");
-        }
     }
 
     private async Task SaveRefreshTokenAsync(
@@ -227,7 +201,8 @@ public sealed class AuthenticationService(
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(ClaimTypes.Name, user.UserName ?? user.Email ?? user.Id.ToString()),
             new(ClaimTypes.Email, user.Email ?? string.Empty),
-            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new("security_stamp", user.SecurityStamp ?? string.Empty)
         };
         claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
 
@@ -251,23 +226,19 @@ public sealed class AuthenticationService(
             user.Email ?? string.Empty,
             roles.ToArray(),
             refreshToken,
-            refreshTokenExpiresAt);
+            refreshTokenExpiresAt,
+            user.MustChangePassword);
     }
 
-    private static RegistrationResult EmailConflict() =>
-        new(null, EmptyErrors(), true);
-
-    private static RegistrationResult ValidationFailure(IEnumerable<IdentityError> errors) =>
-        new(
-            null,
-            errors
-                .GroupBy(error => error.Code.StartsWith("Password", StringComparison.Ordinal)
-                    ? "password"
-                    : "account")
-                .ToDictionary(
-                    group => group.Key,
-                    group => group.Select(error => error.Description).ToArray()),
-            false);
+    private static IReadOnlyDictionary<string, string[]> ValidationFailure(
+        IEnumerable<IdentityError> errors) =>
+        errors
+            .GroupBy(error => error.Code.StartsWith("Password", StringComparison.Ordinal)
+                ? "password"
+                : "account")
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(error => error.Description).ToArray());
 
     private static IReadOnlyDictionary<string, string[]> EmptyErrors() =>
         new Dictionary<string, string[]>();

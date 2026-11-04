@@ -7,6 +7,7 @@ export interface AuthSession {
   userId: string;
   email: string;
   roles: string[];
+  passwordChangeRequired?: boolean;
   refreshToken?: string;
   refreshTokenExpiresAtUtc?: string;
 }

@@ -9,4 +9,5 @@ public sealed record AuthResponse(
     string Email,
     IReadOnlyList<string> Roles,
     string? RefreshToken = null,
-    DateTimeOffset? RefreshTokenExpiresAtUtc = null);
+    DateTimeOffset? RefreshTokenExpiresAtUtc = null,
+    bool PasswordChangeRequired = false);

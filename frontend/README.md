@@ -3,7 +3,7 @@
 Angular 21 client workspace. For setup, environment configuration, and the full
 run instructions, see the [repository README](../README.md).
 
-The Angular screen supports account registration/sign-in, private PDF, TXT,
+The Angular screen supports administrator sign-in, member management, private PDF, TXT,
 DOC, and DOCX upload/download, sharing, and an in-browser PDF editor for users
 with owner or EDIT access. TXT has a direct text editor; Word text editing uses
 the isolated converter service and saves simplified DOCX output without

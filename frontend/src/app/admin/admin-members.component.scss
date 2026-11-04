@@ -1,0 +1,98 @@
+:host {
+  display: block;
+  margin: 2rem 0;
+  text-align: left;
+}
+
+.admin-members {
+  border-top: 1px solid #e1e7ef;
+  padding-top: 1.5rem;
+}
+
+h3,
+h4 {
+  color: #183b67;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+}
+
+label {
+  margin: 1rem 0 0.45rem;
+  color: #28374d;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input,
+select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.9rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.55rem;
+  background: #fff;
+  color: #172033;
+  font: inherit;
+}
+
+.member-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.member-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem;
+  border: 1px solid #e1e7ef;
+  border-radius: 0.65rem;
+}
+
+.member-list li > span,
+.member-list li > span > span {
+  display: block;
+}
+
+.member-list li > span > span,
+.member-status {
+  margin-top: 0.25rem;
+  color: #657187;
+  font-size: 0.85rem;
+}
+
+.member-list .secondary-button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.credential-notice {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #e7c56e;
+  border-radius: 0.65rem;
+  background: #fff9e8;
+}
+
+.credential-notice code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 0.75rem;
+  background: #fff;
+  user-select: all;
+}
+
+@media (max-width: 34rem) {
+  .member-list li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -9,7 +9,7 @@ implemented; production deployment is not.
 ## Architecture
 
 - `frontend/`: Angular 21 and TypeScript.
-- `backend/TrustVault.Api`: ASP.NET Core 10 API, Identity registration/login,
+- `backend/TrustVault.Api`: ASP.NET Core 10 API, admin-managed accounts/login,
   short-lived JWT validation, deny-by-default authorization policy, and
   owner and active-grant document authorization.
 - `backend/TrustVault.Application`: application use cases and private document
@@ -68,6 +68,9 @@ $rng.Dispose()
 $env:Jwt__SigningKey = [Convert]::ToBase64String($keyBytes)
 $env:Jwt__Issuer = "TrustVault"
 $env:Jwt__Audience = "TrustVault"
+$env:AdminBootstrap__Email = "admin@gmail.com"
+$secureAdminPassword = Read-Host "Set the bootstrap administrator password" -AsSecureString
+$env:AdminBootstrap__Password = [System.Net.NetworkCredential]::new("", $secureAdminPassword).Password
 $env:Frontend__Origin = "http://localhost:4200"
 $env:DocumentConversion__Endpoint = "http://localhost:6100/"
 $env:ConnectionStrings__TrustVaultMigrator = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_migrator;Password=migrator_local"
@@ -89,9 +92,22 @@ npm start
 ```
 
 The API listens at `http://localhost:5106` and the Angular app at
-`http://localhost:4200`. Health and the registration/login endpoints are
-anonymous; the other API routes require a valid JWT. New accounts receive the
-Viewer role. Authentication returns a 15-minute bearer token by default,
+`http://localhost:4200`. Health, login, and refresh are anonymous; public
+registration is disabled. On the first API startup after migration, the API
+creates the sole Administrator from `AdminBootstrap__Email` and
+`AdminBootstrap__Password`.
+Store the password in a local secret manager or environment, not in source
+control. Once the administrator exists, the bootstrap settings can be removed.
+The administrator can create member accounts by email; every new account
+automatically receives the Viewer base role, with no role selector. Document
+ownership is assigned to the uploader for each document, and owners grant
+document-specific access. Each new member receives a one-time temporary
+password that must be changed at first sign-in. Removing a member disables
+their account and revokes their tokens and active grants immediately, while
+retaining their documents and audit records. Adding a previously removed email
+reactivates the same identity with a new temporary password; its documents are
+retained, while old access grants remain revoked.
+Authentication returns a 15-minute bearer token by default,
 configurable to 5-30 minutes with `Jwt:AccessTokenLifetimeMinutes`. The Angular
 client keeps the token in memory only, so closing or reloading the page signs
 the user out. The development API documentation is at `/swagger`.
@@ -126,8 +142,12 @@ for production.
 1. Keep the API running in the first PowerShell window.
 2. In a second PowerShell window, run `Set-Location frontend` and then
    `npm start`.
-3. Open `http://localhost:4200`, create an account, and sign in.
-4. In **Documents**, enter a title/category, choose a small dummy PDF, TXT,
+3. Open `http://localhost:4200` and sign in as the bootstrap administrator.
+4. In **Manage members**, add a member by email. The account receives the
+   Viewer base role automatically. Deliver the displayed temporary password
+   securely out-of-band. Sign out, then sign in as that member and change the
+   temporary password.
+5. In **Documents**, enter a title/category, choose a small dummy PDF, TXT,
    DOC, or DOCX file, and select **Upload file**. Wait for the scan status to
    show `clean`; if it shows `scan failed`, confirm the local ClamAV service is
    ready and select **Retry scan**. Only clean files can be downloaded or
@@ -216,10 +236,14 @@ URL are not configured. No seeded demo users or demo video are included.
 ## Security status
 
 The API validates JWT signatures, issuer, audience, and expiration, and applies
-an authenticated-user fallback policy. Registration assigns the least-privilege
-Viewer role; passwords use Identity's configured requirements and hashing.
-Failed sign-ins trigger Identity lockout, and authentication routes have an
-in-memory per-IP rate limit. Document metadata and downloads are available to
+an authenticated-user fallback policy. Public registration is disabled. The
+sole bootstrap administrator creates Viewer-default members with mandatory
+temporary-password changes; client-supplied role values are ignored. Document
+ownership is assigned per document to its uploader. Passwords use Identity's configured
+requirements and hashing. Failed sign-ins trigger Identity lockout, and
+authentication routes have an in-memory per-IP rate limit. Every authenticated
+request checks current account suspension and security-stamp state in the
+database to invalidate tokens immediately on member removal. Document metadata and downloads are available to
 the owner or a user with an active named grant; the server checks grant state
 on each request, so revocation takes effect immediately. Unauthorized users
 receive 404. Upload, list, metadata, download, grant, revoke, and denied access
@@ -234,8 +258,8 @@ are flattened to images, so text search, links, forms, signatures, and
 accessibility features are lost. Redaction clears app-accessible previous
 versions but cannot erase external backups or copies already downloaded.
 Production malware-scanning and durable-storage choices, email verification,
-password recovery, user suspension management, independent audit anchoring,
-and production DB role provisioning remain follow-up work. Locally, uploads
+password recovery, independent audit anchoring, and production DB role
+provisioning remain follow-up work. Locally, uploads
 are synchronously scanned by ClamAV; pending, rejected, and failed files are
 blocked from download and editing. Existing documents are migrated to a
 pending scan state and must be rescanned before use. Local and CI use separate migrator

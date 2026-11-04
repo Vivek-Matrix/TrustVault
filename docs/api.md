@@ -5,10 +5,13 @@ anonymous. The browser's route guards are not an authorization boundary.
 
 | Method | Route | Access | Purpose |
 |---|---|---|---|
-| POST | `/api/auth/register` | Anonymous; 10 requests/minute/IP | Create a Viewer account and return access and refresh tokens |
 | POST | `/api/auth/login` | Anonymous; 10 requests/minute/IP | Validate credentials and return access and refresh tokens |
 | POST | `/api/auth/refresh` | Anonymous; 10 requests/minute/IP | Rotate a valid refresh token and issue a new access/refresh token pair |
-| POST | `/api/auth/logout` | Authenticated | Revoke the caller's refresh token |
+| POST | `/api/auth/logout` | Authenticated | Revoke the caller's refresh token and invalidate their current access token |
+| POST | `/api/auth/change-password` | Authenticated; required before a newly created member may access other APIs | Change the current password and return a replacement token pair |
+| GET | `/api/admin/members` | Sole Administrator | List member accounts and roles |
+| POST | `/api/admin/members` | Sole Administrator | Create or reactivate a Viewer account and return its one-time temporary password; document ownership is established by uploading a document |
+| DELETE | `/api/admin/members/{userId}` | Sole Administrator | Deactivate a member, revoke tokens and grants, preserve documents and audit history |
 | POST | `/api/documents` | Authenticated owner | Upload a supported file; ownership is taken from the signed-in identity |
 | POST | `/api/documents/{id}/scan/retry` | Document owner | Retry a pending or failed scan |
 | GET | `/api/documents` | Owner or active grantee | List non-deleted documents owned by or shared with the caller |
@@ -31,13 +34,30 @@ anonymous. The browser's route guards are not an authorization boundary.
 | GET | `/api/system/whoami` | Any authenticated JWT | Return the caller's subject and role claims |
 | GET | `/swagger` | Anonymous, Development only | Development API documentation |
 
-Registration creates accounts with the `Viewer` role; the request cannot select
-or elevate roles. Passwords are validated and hashed by ASP.NET Core Identity.
+Public registration is disabled. The sole Administrator is bootstrapped from
+`AdminBootstrap:Email` and `AdminBootstrap:Password` configuration when no
+administrator exists; the API refuses to start without an administrator or
+valid bootstrap configuration. A database unique index enforces one primary
+administrator. Member creation accepts an email address only and always creates
+a `Viewer` account; any role value supplied by a client is ignored. Re-adding a
+deactivated email reactivates its existing identity and resets its password;
+preserved documents remain associated with that identity, but previously
+revoked grants are not restored. The 32-character temporary password is
+returned once and must be changed before access to any other API. Deliver it
+out-of-band. Passwords are validated and hashed by
+ASP.NET Core Identity. Document ownership belongs to an individual document
+and is assigned to its uploader; owners grant or revoke per-document `READ` or
+`EDIT` access.
 Login returns the same `401` response for an unknown email, invalid password,
 locked-out account, or suspended account. Repeated failed passwords trigger
-Identity lockout. Registration and login issue an access token and a refresh
-token; refresh tokens are stored as hashes, rotated on use, and revoked on
-logout. Access tokens default to 15 minutes; the configured lifetime must
+Identity lockout. Login issues an access token and a refresh token; refresh
+tokens are stored as hashes and rotated on use. Each access token is checked
+against the current database account state and security stamp on every request.
+Member removal revokes refresh tokens, rotates the security stamp, and revokes
+active grants involving the removed account or documents it owns, invalidating
+already-issued access tokens immediately. Documents and audit history remain
+retained. Logout also invalidates the caller's access token. Access tokens
+default to 15 minutes; the configured lifetime must
 remain between 5 and 30 minutes. The Angular client holds the access token only
 in memory and does not persist it across page reloads.
 

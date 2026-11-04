@@ -1,23 +1,31 @@
 @TrustVault.Api_HostAddress = http://localhost:5106
 
-### Register a Viewer account
-POST {{TrustVault.Api_HostAddress}}/api/auth/register
-Content-Type: application/json
-
-{
-  "email": "new-user@example.test",
-  "password": "ReplaceWithStrongPassword123!"
-}
-
-###
-
-### Sign in
+### Sign in as an administrator or managed member
 POST {{TrustVault.Api_HostAddress}}/api/auth/login
 Content-Type: application/json
 
 {
-  "email": "new-user@example.test",
-  "password": "ReplaceWithStrongPassword123!"
+  "email": "administrator@example.test",
+  "password": "SetInLocalSecretStore"
+}
+
+###
+
+### List members (Administrator only)
+GET {{TrustVault.Api_HostAddress}}/api/admin/members
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Add member (Administrator only; temporary password is returned once)
+POST {{TrustVault.Api_HostAddress}}/api/admin/members
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "email": "new-member@example.test",
+  "role": "Viewer"
 }
 
 ###

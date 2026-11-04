@@ -15,23 +15,35 @@ controls are not.
 
 ## Authorization model
 
-Roles are `Administrator`, `DocumentOwner`, and `Viewer`. Roles describe broad
-capabilities, not document access. The per-document ACL is a grant to a named
-user; only the owner may grant or revoke. `Read` grants allow viewing and
-download. `Edit` grants additionally allow metadata updates and PDF replacement
-or page edits; each operation checks the active grant on the server. An
-administrator does not inherit document access. A revoked grant is retained
+`Administrator` is the only elevated account role; member accounts are assigned
+the `Viewer` base role at creation. Document ownership is not an account role:
+the uploader becomes owner of that document. The per-document ACL grants access
+to named users; only the document owner may grant or revoke. `Read` grants allow
+viewing and download. `Edit` grants additionally allow metadata updates and PDF
+replacement or page edits; each operation checks the active grant on the server.
+An administrator does not inherit document access. A revoked grant is retained
 for history and takes effect when the server evaluates active grants on each
 request.
 
-The API's fallback policy requires authentication; health, registration/login,
-and the development OpenAPI document are explicit anonymous exceptions. The
+The API's fallback policy requires authentication; health, login, refresh, and
+the development OpenAPI document are explicit anonymous exceptions. Public
+registration is disabled. The sole Administrator is bootstrapped from protected
+configuration; only that account can create members. Member creation accepts
+only an email address and always assigns the base `Viewer` role; client-supplied
+role values are ignored. Document ownership is a per-document relationship
+assigned to the uploader, not an account role. Owners grant or revoke `READ` or
+`EDIT` access to named users for each document. Member creation issues a
+one-time temporary password and requires a password change before any other
+authenticated operation. The
 database readiness endpoint remains protected by the fallback policy. JWT
 validation requires a secret key supplied through configuration and rejects
-keys under 32 UTF-8 bytes. Registration assigns the Viewer role, and issued
-access tokens default to 15 minutes. Refresh tokens are issued, hashed, rotated,
-and revoked server-side; account suspension administration and email
-verification remain future work.
+keys under 32 UTF-8 bytes. Every authenticated request also checks the user's
+active status and security stamp in PostgreSQL so administrative deactivation
+and password changes immediately invalidate existing access tokens. Refresh
+tokens are issued, hashed, rotated, and revoked server-side. A unique database index and API guards protect the
+sole primary administrator. Account create/deactivate operations are appended
+to the existing hash chain; this does not protect against a privileged database
+operator rewriting the chain.
 
 ## Data model
 

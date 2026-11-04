@@ -102,11 +102,14 @@ only on the separate generated local server.
    Docker build arguments, frontend files, or chat. Use an AWS secret-management
    service if a deployment is approved.
 5. Do not deploy confidential documents. Local login/token issuance,
-   document authorization, revocation, and hash-chained audit writes are
-   implemented. Local document scans use ClamAV and block access unless clean,
-   but the local filesystem and scanner are not production providers.
-   Independent audit anchoring and production database-role configuration
-   remain unfinished.
+   administrator-managed member creation/deactivation, immediate token
+   invalidation, document authorization, revocation, and hash-chained audit
+   writes are implemented. The API requires a protected
+   `AdminBootstrap:Email` and `AdminBootstrap:Password` secret only when no
+   administrator exists. Local document scans use ClamAV and block access
+   unless clean, but the local filesystem and scanner are not production
+   providers. Independent audit anchoring, email verification, password
+   recovery, and production database-role configuration remain unfinished.
 
 ## Production document pipeline design gate
 
@@ -138,8 +141,8 @@ The implementation sequence and acceptance goals are tracked in the
 2. Approve and implement private durable document storage and a fail-closed
    malware scanning/quarantine flow; test it with dummy files. The current
    local ClamAV/filesystem pipeline is not the production design.
-3. Complete the required account-lifecycle controls and establish independent
-   audit-chain anchoring.
+3. Complete remaining account-lifecycle controls (email verification and
+   password recovery) and establish independent audit-chain anchoring.
 4. Approve an architecture and cost estimate for `ap-southeast-2`, after
    confirming project spend limits and service eligibility in AWS Settings.
 5. Deploy and exercise operational controls only after the security gates pass.

@@ -34,10 +34,10 @@ describe('AuthService', () => {
 
   afterEach(() => http.verify());
 
-  it('stores the returned registration token in memory', () => {
-    service.register(session.email, 'ValidPassword123!').subscribe();
+  it('stores the returned login token in memory', () => {
+    service.login(session.email, 'ValidPassword123!').subscribe();
 
-    const request = http.expectOne(`${environment.apiBaseUrl}/auth/register`);
+    const request = http.expectOne(`${environment.apiBaseUrl}/auth/login`);
     expect(request.request.method).toBe('POST');
     expect(request.request.body).toEqual({
       email: session.email,
@@ -47,6 +47,38 @@ describe('AuthService', () => {
 
     expect(service.session()).toEqual(session);
     expect(sessionStore.accessToken()).toBe(session.accessToken);
+  });
+
+  it('updates the stored session after changing a temporary password', () => {
+    sessionStore.setSession({ ...session, passwordChangeRequired: true });
+    const updatedSession = {
+      ...session,
+      accessToken: 'replacement-token',
+      passwordChangeRequired: false,
+    };
+
+    service.changePassword('TemporaryPassword123!', 'NewStrongPassword123!').subscribe();
+
+    const request = http.expectOne(`${environment.apiBaseUrl}/auth/change-password`);
+    expect(request.request.method).toBe('POST');
+    expect(request.request.headers.get('Authorization')).toBe('Bearer test-access-token');
+    expect(request.request.body).toEqual({
+      currentPassword: 'TemporaryPassword123!',
+      newPassword: 'NewStrongPassword123!',
+    });
+    request.flush(updatedSession);
+
+    expect(service.session()).toEqual(updatedSession);
+    expect(sessionStore.accessToken()).toBe('replacement-token');
+  });
+
+  it('does not send access tokens to anonymous login or refresh endpoints', () => {
+    sessionStore.setSession(session);
+    service.login(session.email, 'ValidPassword123!').subscribe();
+
+    const loginRequest = http.expectOne(`${environment.apiBaseUrl}/auth/login`);
+    expect(loginRequest.request.headers.has('Authorization')).toBeFalse();
+    loginRequest.flush(session);
   });
 
   it('adds the bearer token to protected API requests only', () => {

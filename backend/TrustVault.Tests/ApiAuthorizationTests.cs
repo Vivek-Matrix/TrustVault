@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
 using TrustVault.Api.Models.Auth;
+using TrustVault.Api.Models.Admin;
 using TrustVault.Api.Models.Documents;
 using TrustVault.Api.Services;
 using TrustVault.Application.Documents;
@@ -54,9 +55,12 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task Readiness_endpoint_accepts_valid_token_and_reports_database_state()
     {
+        var administrator = await GetAdministratorSessionAsync();
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/system/ready");
         request.Headers.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", CreateAccessToken());
+            new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer",
+                administrator.AccessToken);
 
         var response = await _client.SendAsync(request);
 
@@ -88,9 +92,12 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task Protected_endpoint_accepts_a_valid_access_token()
     {
+        var administrator = await GetAdministratorSessionAsync();
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/system/whoami");
         request.Headers.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", CreateAccessToken());
+            new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer",
+                administrator.AccessToken);
 
         var response = await _client.SendAsync(request);
 
@@ -117,65 +124,303 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Registration_creates_viewer_and_returns_short_lived_access_token()
+    public async Task Administrator_creates_member_with_temporary_password_and_member_must_change_it()
     {
         var email = NewEmail();
-        using var response = await RegisterAsync(email);
-
+        using var response = await AddMemberAsync(email);
         Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
-        var auth = await response.Content.ReadFromJsonAsync<AuthResponse>();
-        Assert.NotNull(auth);
-        Assert.Equal("Bearer", auth.TokenType);
-        Assert.Contains(UserRoles.Viewer, auth.Roles);
-        Assert.InRange(
-            auth.ExpiresAtUtc,
-            DateTimeOffset.UtcNow.AddMinutes(4),
-            DateTimeOffset.UtcNow.AddMinutes(16));
+        var member = await response.Content.ReadFromJsonAsync<MemberCreatedResponse>();
+        Assert.NotNull(member);
+        Assert.Equal(email, member.Email);
+        Assert.Equal(UserRoles.Viewer, member.Role);
+        Assert.True(member.PasswordChangeRequired);
+        Assert.False(string.IsNullOrWhiteSpace(member.TemporaryPassword));
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/system/whoami");
-        request.Headers.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", auth.AccessToken);
+        using var loginResponse = await LoginAsync(email, member.TemporaryPassword);
+        Assert.Equal(System.Net.HttpStatusCode.OK, loginResponse.StatusCode);
+        var login = await loginResponse.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(login);
+        Assert.True(login.PasswordChangeRequired);
+        using var blockedRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/system/whoami",
+            login.AccessToken);
+        using var blockedResponse = await _client.SendAsync(blockedRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, blockedResponse.StatusCode);
+
+        using var changeRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            "/api/auth/change-password",
+            login.AccessToken,
+            JsonContent.Create(new
+            {
+                currentPassword = member.TemporaryPassword,
+                newPassword = TestPassword
+            }));
+        using var rejectedChangeRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            "/api/auth/change-password",
+            login.AccessToken,
+            JsonContent.Create(new
+            {
+                currentPassword = member.TemporaryPassword,
+                newPassword = "lowercasepassword123!"
+            }));
+        using var rejectedChangeResponse = await _client.SendAsync(rejectedChangeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, rejectedChangeResponse.StatusCode);
+
+        using var changeResponse = await _client.SendAsync(changeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, changeResponse.StatusCode);
+        var changed = await changeResponse.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(changed);
+        Assert.False(changed.PasswordChangeRequired);
+
+        using var request = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/system/whoami",
+            changed.AccessToken);
         using var whoAmI = await _client.SendAsync(request);
         Assert.Equal(System.Net.HttpStatusCode.OK, whoAmI.StatusCode);
     }
 
     [Fact]
-    public async Task Registration_cannot_select_an_elevated_role()
+    public async Task Public_registration_is_not_available()
     {
-        var email = NewEmail();
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/register")
-        {
-            Content = JsonContent.Create(new
-            {
-                email,
-                password = TestPassword,
-                role = UserRoles.Administrator
-            })
-        };
-        using var response = await _client.SendAsync(request);
-        var auth = await response.Content.ReadFromJsonAsync<AuthResponse>();
-
-        Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
-        Assert.NotNull(auth);
-        Assert.Equal(new[] { UserRoles.Viewer }, auth.Roles);
+        using var response = await _client.PostAsJsonAsync(
+            "/api/auth/register",
+            new { email = NewEmail(), password = TestPassword });
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
-    public async Task Registration_rejects_duplicate_email()
+    public async Task Member_creation_ignores_attempts_to_assign_a_role()
     {
         var email = NewEmail();
-        using var created = await RegisterAsync(email);
-        using var duplicate = await RegisterAsync(email);
+        using var response = await AddMemberAsync(email, UserRoles.Administrator);
+        Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<MemberCreatedResponse>();
+        Assert.NotNull(created);
+        Assert.Equal(UserRoles.Viewer, created.Role);
+
+        using var scope = _factory.Services.CreateScope();
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var member = await userManager.FindByEmailAsync(email);
+        Assert.NotNull(member);
+        Assert.Equal(new[] { UserRoles.Viewer }, await userManager.GetRolesAsync(member));
+    }
+
+    [Fact]
+    public async Task Only_administrator_can_create_members()
+    {
+        var member = await CreateMemberAndSetPasswordAsync(NewEmail());
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/admin/members")
+        {
+            Content = JsonContent.Create(new
+            {
+                email = NewEmail(),
+            })
+        };
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", member.AccessToken);
+        using var response = await _client.SendAsync(request);
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Removing_member_immediately_revokes_issued_access_and_refresh_tokens()
+    {
+        var email = NewEmail();
+        var memberSession = await CreateMemberAndSetPasswordAsync(email);
+        using var memberListRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/members",
+            await GetAdministratorSessionAsync());
+        using var memberListResponse = await _client.SendAsync(memberListRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, memberListResponse.StatusCode);
+        var members = await memberListResponse.Content.ReadFromJsonAsync<MemberResponse[]>();
+        Assert.NotNull(members);
+        var member = Assert.Single(members, item => item.Email == email);
+
+        using var removeRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/admin/members/{member.UserId}",
+            await GetAdministratorSessionAsync());
+        using var removeResponse = await _client.SendAsync(removeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, removeResponse.StatusCode);
+
+        using var whoAmIRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/system/whoami",
+            memberSession.AccessToken);
+        using var whoAmIResponse = await _client.SendAsync(whoAmIRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, whoAmIResponse.StatusCode);
+
+        using var refreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh")
+        {
+            Content = JsonContent.Create(new { refreshToken = memberSession.RefreshToken })
+        };
+        using var refreshResponse = await _client.SendAsync(refreshRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refreshResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Removing_document_owner_preserves_documents_and_audit_but_revokes_grantees()
+    {
+        var owner = await CreateMemberAndSetPasswordAsync(NewEmail());
+        var reader = await CreateMemberAndSetPasswordAsync(NewEmail());
+        using var upload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var grantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new { email = reader.Email, permission = "READ" }));
+        using var grantResponse = await _client.SendAsync(grantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, grantResponse.StatusCode);
+
+        var administrator = await GetAdministratorSessionAsync();
+        using var listRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/members",
+            administrator);
+        using var listResponse = await _client.SendAsync(listRequest);
+        var members = await listResponse.Content.ReadFromJsonAsync<MemberResponse[]>();
+        Assert.NotNull(members);
+        var ownerMember = Assert.Single(members, item => item.Email == owner.Email);
+        using var removeRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/admin/members/{ownerMember.UserId}",
+            administrator);
+        using var removeResponse = await _client.SendAsync(removeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, removeResponse.StatusCode);
+
+        using var readerRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}",
+            reader);
+        using var readerResponse = await _client.SendAsync(readerRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, readerResponse.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.True(await database.Documents.AnyAsync(item => item.Id == document.Id));
+        Assert.True(await database.AuditEvents.AnyAsync(item =>
+            item.DocumentId == document.Id && item.Action == "document.upload"));
+        Assert.True(await database.DocumentGrants.AnyAsync(item =>
+            item.DocumentId == document.Id && item.UserId == Guid.Parse(reader.UserId)
+                && item.RevokedAtUtc != null));
+    }
+
+    [Fact]
+    public async Task Administrator_cannot_remove_the_primary_administrator()
+    {
+        var administrator = await GetAdministratorSessionAsync();
+        using var request = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/admin/members/{administrator.UserId}",
+            administrator);
+        using var response = await _client.SendAsync(request);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Bootstrap_creates_exactly_one_primary_administrator()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var administrators = await userManager.GetUsersInRoleAsync(UserRoles.Administrator);
+
+        var administrator = Assert.Single(administrators);
+        Assert.True(administrator.IsPrimaryAdministrator);
+        Assert.Equal(ApiFactory.AdministratorEmail, administrator.Email);
+    }
+
+    [Fact]
+    public async Task Logout_invalidates_the_current_access_and_refresh_tokens()
+    {
+        var member = await CreateMemberAndSetPasswordAsync(NewEmail());
+        using var logoutRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            "/api/auth/logout",
+            member);
+        using var logoutResponse = await _client.SendAsync(logoutRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, logoutResponse.StatusCode);
+
+        using var whoAmIRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/system/whoami",
+            member.AccessToken);
+        using var whoAmIResponse = await _client.SendAsync(whoAmIRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, whoAmIResponse.StatusCode);
+
+        using var refreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh")
+        {
+            Content = JsonContent.Create(new { refreshToken = member.RefreshToken })
+        };
+        using var refreshResponse = await _client.SendAsync(refreshRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refreshResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Administrator_member_creation_rejects_duplicate_email()
+    {
+        var email = NewEmail();
+        using var created = await AddMemberAsync(email);
+        using var duplicate = await AddMemberAsync(email);
 
         Assert.Equal(System.Net.HttpStatusCode.Created, created.StatusCode);
         Assert.Equal(System.Net.HttpStatusCode.Conflict, duplicate.StatusCode);
     }
 
     [Fact]
+    public async Task Administrator_can_reactivate_removed_member_with_same_email()
+    {
+        var email = NewEmail();
+        _ = await CreateMemberAndSetPasswordAsync(email);
+        var administrator = await GetAdministratorSessionAsync();
+
+        using var memberListRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/members",
+            administrator);
+        using var memberListResponse = await _client.SendAsync(memberListRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, memberListResponse.StatusCode);
+        var members = await memberListResponse.Content.ReadFromJsonAsync<MemberResponse[]>();
+        Assert.NotNull(members);
+        var originalMember = Assert.Single(members, item => item.Email == email);
+
+        using var removeRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/admin/members/{originalMember.UserId}",
+            administrator);
+        using var removeResponse = await _client.SendAsync(removeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, removeResponse.StatusCode);
+
+        using var reactivationResponse = await AddMemberAsync(email);
+        Assert.Equal(System.Net.HttpStatusCode.Created, reactivationResponse.StatusCode);
+        var reactivated = await reactivationResponse.Content.ReadFromJsonAsync<MemberCreatedResponse>();
+        Assert.NotNull(reactivated);
+        Assert.Equal(originalMember.UserId, reactivated.UserId);
+        Assert.Equal(UserRoles.Viewer, reactivated.Role);
+        Assert.True(reactivated.PasswordChangeRequired);
+
+        using var oldPasswordLogin = await LoginAsync(email, TestPassword);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, oldPasswordLogin.StatusCode);
+        using var temporaryPasswordLogin = await LoginAsync(email, reactivated.TemporaryPassword);
+        Assert.Equal(System.Net.HttpStatusCode.OK, temporaryPasswordLogin.StatusCode);
+        var session = await temporaryPasswordLogin.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(session);
+        Assert.True(session.PasswordChangeRequired);
+    }
+
+    [Fact]
     public async Task Login_returns_token_for_valid_credentials()
     {
         var email = NewEmail();
-        using var registration = await RegisterAsync(email);
+        _ = await CreateMemberAndSetPasswordAsync(email);
         using var response = await LoginAsync(email, TestPassword);
 
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
@@ -189,7 +434,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     {
         using var unknownEmail = await LoginAsync(NewEmail(), "WrongPassword123!");
         var email = NewEmail();
-        using var registration = await RegisterAsync(email);
+        _ = await CreateMemberAndSetPasswordAsync(email);
         using var wrongPassword = await LoginAsync(email, "WrongPassword123!");
 
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, unknownEmail.StatusCode);
@@ -205,8 +450,9 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     public async Task Refresh_token_endpoint_rotates_tokens_and_rejects_stale_token()
     {
         var email = NewEmail();
-        using var registration = await RegisterAsync(email);
-        var initialAuth = await registration.Content.ReadFromJsonAsync<AuthResponse>();
+        _ = await CreateMemberAndSetPasswordAsync(email);
+        using var login = await LoginAsync(email, TestPassword);
+        var initialAuth = await login.Content.ReadFromJsonAsync<AuthResponse>();
         Assert.NotNull(initialAuth);
         Assert.False(string.IsNullOrWhiteSpace(initialAuth.RefreshToken));
 
@@ -236,7 +482,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     public async Task Login_locks_account_after_repeated_failed_passwords()
     {
         var email = NewEmail();
-        using var registration = await RegisterAsync(email);
+        _ = await CreateMemberAndSetPasswordAsync(email);
         for (var attempt = 0; attempt < 5; attempt++)
         {
             using var invalid = await LoginAsync(email, "WrongPassword123!");
@@ -252,7 +498,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     public async Task Login_rejects_suspended_account()
     {
         var email = NewEmail();
-        using var registration = await RegisterAsync(email);
+        _ = await CreateMemberAndSetPasswordAsync(email);
         using var scope = _factory.Services.CreateScope();
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var user = await userManager.FindByEmailAsync(email);
@@ -264,22 +510,6 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         using var response = await LoginAsync(email, TestPassword);
 
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Invalid_registration_password_is_rejected()
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/register")
-        {
-            Content = System.Net.Http.Json.JsonContent.Create(new RegisterRequest
-            {
-                Email = NewEmail(),
-                Password = "weak"
-            })
-        };
-        using var response = await _client.SendAsync(request);
-
-        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
@@ -1466,11 +1696,7 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
 
     private async Task<AuthResponse> RegisterAndGetSessionAsync()
     {
-        using var response = await RegisterAsync(NewEmail());
-        Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
-        var auth = await response.Content.ReadFromJsonAsync<AuthResponse>();
-        Assert.NotNull(auth);
-        return auth;
+        return await CreateMemberAndSetPasswordAsync(NewEmail());
     }
 
     private Task<HttpResponseMessage> UploadPdfAsync(AuthResponse auth) =>
@@ -1536,17 +1762,62 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         return request;
     }
 
-    private async Task<HttpResponseMessage> RegisterAsync(string email)
+    private async Task<HttpResponseMessage> AddMemberAsync(string email, string? attemptedRole = null)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/register")
+        var administrator = await GetAdministratorSessionAsync();
+        var content = attemptedRole is null
+            ? JsonContent.Create(new { email })
+            : JsonContent.Create(new { email, role = attemptedRole });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/admin/members")
         {
-            Content = JsonContent.Create(new
-            {
-                email,
-                password = TestPassword
-            })
+            Content = content
         };
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Bearer",
+                administrator.AccessToken);
         return await _client.SendAsync(request);
+    }
+
+    private async Task<AuthResponse> CreateMemberAndSetPasswordAsync(string email)
+    {
+        using var createResponse = await AddMemberAsync(email);
+        Assert.Equal(System.Net.HttpStatusCode.Created, createResponse.StatusCode);
+        var created = await createResponse.Content.ReadFromJsonAsync<MemberCreatedResponse>();
+        Assert.NotNull(created);
+
+        using var loginResponse = await LoginAsync(email, created.TemporaryPassword);
+        Assert.Equal(System.Net.HttpStatusCode.OK, loginResponse.StatusCode);
+        var login = await loginResponse.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(login);
+        Assert.True(login.PasswordChangeRequired);
+
+        using var changeRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            "/api/auth/change-password",
+            login.AccessToken,
+            JsonContent.Create(new
+            {
+                currentPassword = created.TemporaryPassword,
+                newPassword = TestPassword
+            }));
+        using var changeResponse = await _client.SendAsync(changeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, changeResponse.StatusCode);
+        var changed = await changeResponse.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(changed);
+        return changed;
+    }
+
+    private async Task<AuthResponse> GetAdministratorSessionAsync()
+    {
+        using var response = await LoginAsync(
+            ApiFactory.AdministratorEmail,
+            ApiFactory.AdministratorPassword);
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        var session = await response.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(session);
+        Assert.Contains(UserRoles.Administrator, session.Roles);
+        return session;
     }
 
     private async Task<HttpResponseMessage> LoginAsync(string email, string password)
@@ -1584,6 +1855,8 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public const string SigningKey = "trustvault-test-signing-key-32-bytes-minimum";
+    public const string AdministratorEmail = "administrator@example.test";
+    public const string AdministratorPassword = "AdminTestPassword123!";
     private readonly Dictionary<string, string?> _previousEnvironmentValues;
     private readonly string _storageRoot;
 
@@ -1598,12 +1871,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 "Host=localhost;Database=trustvault;Username=test;Password=test",
             ["Jwt__SigningKey"] = SigningKey,
             ["Jwt__Issuer"] = "TrustVault.Tests",
-            ["Jwt__Audience"] = "TrustVault.Tests"
+            ["Jwt__Audience"] = "TrustVault.Tests",
+            ["AdminBootstrap__Email"] = AdministratorEmail,
+            ["AdminBootstrap__Password"] = AdministratorPassword
         };
         testSettings["ConnectionStrings__TrustVault"] =
             "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only";
         testSettings["Jwt__AccessTokenLifetimeMinutes"] = "15";
-        testSettings["RateLimits__AuthenticationPermitLimit"] = "100";
+        testSettings["RateLimits__AuthenticationPermitLimit"] = "1000";
         testSettings["Storage__RootPath"] = _storageRoot;
         testSettings["ConnectionStrings__TrustVault"] =
             "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local";
