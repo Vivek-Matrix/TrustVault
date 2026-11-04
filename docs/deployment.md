@@ -22,6 +22,9 @@ services by following earlier copies of this plan.
   It does not publish the image to a registry or deploy it to AWS.
 - The backend uses PostgreSQL. AWS database selection and network design have
   not been completed.
+- Sprint 4 now separates the PostgreSQL migrator and runtime roles in local
+  setup and CI. The production database and secret-injection design are not
+  configured.
 - The requested selected Region is `ap-southeast-2`. The owner confirmed the
   `trustvault-dev` profile; its AWS CLI sign-in succeeded and its configured
   Region is `ap-southeast-2`.
@@ -97,9 +100,29 @@ only on the separate generated local server.
 4. Do not put database credentials, signing keys, or AWS credentials in Git,
    Docker build arguments, frontend files, or chat. Use an AWS secret-management
    service if a deployment is approved.
-5. Do not deploy confidential documents. Login/token issuance, document
-   authorization and revocation, private object storage, audit-chain writing,
-   and the production database-role split are unfinished.
+5. Do not deploy confidential documents. Local login/token issuance,
+   document authorization, revocation, and hash-chained audit writes are
+   implemented, but production private storage, malware scanning, independent
+   audit anchoring, and the production database-role configuration remain
+   unfinished.
+
+## Security-readiness roadmap
+
+The implementation sequence and acceptance goals are tracked in the
+[project backlog](./backlog.md#remaining-gap-roadmap). The release gates are:
+
+1. Complete Sprint 4 and verify the API role cannot perform schema DDL or
+   mutate audit records.
+2. Implement private durable document storage and a fail-closed malware
+   scanning/quarantine flow; test it with dummy files.
+3. Complete the required account-lifecycle controls and establish independent
+   audit-chain anchoring.
+4. Approve an architecture and cost estimate for `ap-southeast-2`, after
+   confirming project spend limits and service eligibility in AWS Settings.
+5. Deploy and exercise operational controls only after the security gates pass.
+
+No AWS resource provisioning is part of this sprint or approved by this
+roadmap alone.
 
 ## Deployment acceptance checks
 

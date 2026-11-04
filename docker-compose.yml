@@ -9,6 +9,7 @@ services:
       - "55432:5432"
     volumes:
       - trustvault-postgres:/var/lib/postgresql/data
+      - ./database/setup-roles.sql:/docker-entrypoint-initdb.d/10-setup-roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U trustvault_app -d trustvault"]
       interval: 5s

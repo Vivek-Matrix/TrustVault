@@ -1353,6 +1353,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         testSettings["Jwt__AccessTokenLifetimeMinutes"] = "15";
         testSettings["RateLimits__AuthenticationPermitLimit"] = "100";
         testSettings["Storage__RootPath"] = _storageRoot;
+        testSettings["ConnectionStrings__TrustVault"] =
+            "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local";
         _previousEnvironmentValues = testSettings.Keys.ToDictionary(
             name => name,
             Environment.GetEnvironmentVariable);

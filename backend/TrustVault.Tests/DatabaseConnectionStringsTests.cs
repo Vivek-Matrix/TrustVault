@@ -17,7 +17,8 @@ public sealed class DatabaseConnectionStringsTests
             })
             .Build();
 
-        var connectionString = DatabaseConnectionStrings.Get(configuration);
+        var connectionString = DatabaseConnectionStrings.Normalize(
+            configuration["DATABASE_URL"]!);
         var parsed = new NpgsqlConnectionStringBuilder(connectionString);
 
         Assert.Equal("db.example.com", parsed.Host);
@@ -40,5 +41,65 @@ public sealed class DatabaseConnectionStringsTests
             .Build();
 
         Assert.Equal(connectionString, DatabaseConnectionStrings.Get(configuration));
+    }
+
+    [Fact]
+    public void Runtime_connection_does_not_fall_back_to_migrator_credential()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:TrustVaultMigrator"] =
+                    "Host=localhost;Database=trustvault;Username=trustvault_migrator;Password=migrator_local"
+            })
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(
+            () => DatabaseConnectionStrings.Get(configuration));
+    }
+
+    [Fact]
+    public void Runtime_connection_does_not_fall_back_to_database_url()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DATABASE_URL"] =
+                    "postgres://trustvault_runtime:p%40ss%3Aword@db.example.com:5432/trustvault"
+            })
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(
+            () => DatabaseConnectionStrings.Get(configuration));
+    }
+
+    [Fact]
+    public void Migrator_connection_uses_its_explicit_setting()
+    {
+        const string connectionString =
+            "Host=localhost;Database=trustvault;Username=trustvault_migrator;Password=migrator_local";
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:TrustVaultMigrator"] = connectionString
+            })
+            .Build();
+
+        Assert.Equal(connectionString, DatabaseConnectionStrings.GetMigrator(configuration));
+    }
+
+    [Fact]
+    public void Migrator_connection_does_not_fall_back_to_runtime_credential()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:TrustVault"] =
+                    "Host=localhost;Database=trustvault;Username=trustvault_runtime;Password=runtime_local"
+            })
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(
+            () => DatabaseConnectionStrings.GetMigrator(configuration));
     }
 }

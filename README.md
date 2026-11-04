@@ -2,8 +2,9 @@
 
 TrustVault is a local document-sharing prototype. It supports authentication,
 private PDF/TXT/DOC/DOCX upload/download, named-user READ/EDIT sharing, document
-editing, version history, and audit-chain verification. It is not production-ready.
-Refresh-token issuance and production deployment are not implemented.
+editing, version history, and audit-chain verification. It is not
+production-ready. Refresh-token issuance, rotation, and revocation are
+implemented; production deployment is not.
 
 ## Architecture
 
@@ -57,7 +58,9 @@ From the repository root in PowerShell:
 
 ```powershell
 docker compose up -d --build --force-recreate postgres converter converter-dev-proxy
-$env:ConnectionStrings__TrustVault = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only"
+docker compose exec -T postgres psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-setup-roles.sql
+# The role setup script uses local-only passwords; never reuse them outside Compose.
+$env:ConnectionStrings__TrustVault = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local"
 $keyBytes = New-Object byte[] 32
 $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
 $rng.GetBytes($keyBytes)
@@ -67,10 +70,13 @@ $env:Jwt__Issuer = "TrustVault"
 $env:Jwt__Audience = "TrustVault"
 $env:Frontend__Origin = "http://localhost:4200"
 $env:DocumentConversion__Endpoint = "http://localhost:6100/"
+$env:ConnectionStrings__TrustVaultMigrator = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_migrator;Password=migrator_local"
 # Optional: documents are stored outside wwwroot at this path by default.
 # $env:Storage__RootPath = "C:\TrustVaultData\documents"
 dotnet tool restore
 dotnet run --project backend\TrustVault.Migrator
+docker compose exec -T postgres psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-setup-roles.sql
+Remove-Item Env:ConnectionStrings__TrustVaultMigrator
 dotnet run --project backend\TrustVault.Api
 ```
 
@@ -221,11 +227,12 @@ replace text areas, redact, reorder/remove pages, or replace the PDF. Page edits
 are flattened to images, so text search, links, forms, signatures, and
 accessibility features are lost. Redaction clears app-accessible previous
 versions but cannot erase external backups or copies already downloaded.
-Complete PDF validation/malware scanning, email verification, password
-recovery, user suspension management, production storage, and a restricted
-production DB role remain follow-up work. Refresh tokens are now issued,
-rotated, and revoked server-side, while the browser keeps the access token in
-memory only. An endpoint
+Malware scanning, email verification, password recovery, user suspension
+management, production storage, independent audit anchoring, and production DB
+role provisioning remain follow-up work. Local and CI use separate migrator
+and restricted runtime database roles; production credentials still need
+separate provisioning. Refresh tokens are issued, rotated, and revoked
+server-side, while the browser keeps the access token in memory only. An endpoint
 is not secure merely because its UI is hidden.
 
 ## First commit plan

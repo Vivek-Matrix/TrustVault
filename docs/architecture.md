@@ -4,8 +4,9 @@
 
 The Angular 21 application is an untrusted client. ASP.NET Core 10 validates bearer
 tokens and is the only future boundary for document authorization. PostgreSQL holds identities, document metadata, per-user grants, versions, and
-audit events. AWS is the selected cloud provider for a future deployment.
-Specific AWS hosting and database services have not been selected. The existing
+audit events. The API uses a restricted runtime database role; the migrator
+owns schema objects and uses a separate credential. AWS is the selected cloud
+provider for a future deployment. Specific AWS hosting and database services have not been selected. The existing
 Docker image serves the API and Angular app on one origin, but CI only builds
 the image; it does not publish or deploy it. No AWS infrastructure is configured.
 Do not upload real confidential files. Server-side authorization and revocation
@@ -91,9 +92,11 @@ server.
 
 Secrets are supplied via .NET environment variables or a secret manager, never
 the Angular bundle. `Jwt:SigningKey` and `ConnectionStrings:TrustVault` are
-required by the API. `Frontend:Origin` configures the local CORS origin. AWS
-production resources, HTTPS, managed PostgreSQL, durable private object
-storage, runtime DB-role separation, and operational monitoring remain
-unconfigured. AWS
+required by the API. The migrator and EF design-time tools use
+`ConnectionStrings:TrustVaultMigrator`; the API does not fall back to that
+credential. Local Compose and CI provision separate roles, with local-only
+credentials documented in the root README. Production role provisioning,
+secret injection, AWS resources, HTTPS, managed PostgreSQL, durable private
+object storage, and operational monitoring remain unconfigured. AWS
 credentials and application secrets must not be committed to source control or
 included in the frontend bundle.

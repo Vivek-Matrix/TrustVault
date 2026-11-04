@@ -8,12 +8,12 @@ if (args.Length > 0 && !verifyAudit)
     throw new ArgumentException("The only supported argument is --verify-audit.");
 }
 
-var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__TrustVault")
-    ?? Environment.GetEnvironmentVariable("DATABASE_URL");
+var connectionString =
+    Environment.GetEnvironmentVariable("ConnectionStrings__TrustVaultMigrator");
 if (string.IsNullOrWhiteSpace(connectionString))
 {
     throw new InvalidOperationException(
-        "ConnectionStrings:TrustVault or DATABASE_URL must be configured.");
+        "ConnectionStrings:TrustVaultMigrator must be configured.");
 }
 
 connectionString = DatabaseConnectionStrings.Normalize(connectionString);

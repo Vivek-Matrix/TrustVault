@@ -7,12 +7,23 @@ public static class DatabaseConnectionStrings
 {
     public static string Get(IConfiguration configuration)
     {
-        var value = configuration.GetConnectionString("TrustVault")
-            ?? configuration["DATABASE_URL"];
+        var value = configuration.GetConnectionString("TrustVault");
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new InvalidOperationException(
-                "ConnectionStrings:TrustVault or DATABASE_URL must be configured.");
+                "ConnectionStrings:TrustVault must be configured for the API runtime.");
+        }
+
+        return Normalize(value);
+    }
+
+    public static string GetMigrator(IConfiguration configuration)
+    {
+        var value = configuration.GetConnectionString("TrustVaultMigrator");
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException(
+                "ConnectionStrings:TrustVaultMigrator must be configured for migrations.");
         }
 
         return Normalize(value);

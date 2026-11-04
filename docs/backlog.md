@@ -18,9 +18,9 @@ has open items:
 |---|---|---|
 | Solution, API, domain, infrastructure, migrator, tests, and Angular workspace exist | Done | The ASP.NET solution and Angular workspace are present. Authentication, document UI, owner-only document operations, and named-user sharing/revocation are implemented locally. |
 | Local PostgreSQL and initial schema/migration are defined | Done | Compose and the initial EF migration exist. The migrator applied migrations successfully to both the existing local database and a separate empty PostgreSQL database; the existing named volume was preserved. |
-| Authentication skeleton and deny-by-default boundary work | Partial | Registration/login, Viewer-only self-registration, short-lived JWTs, and protected-route tests exist. Refresh tokens, email verification, account-management UI, and revocation of already-issued tokens remain open. |
+| Authentication skeleton and deny-by-default boundary work | Partial | Registration/login, Viewer-only self-registration, short-lived JWTs, rotating/revocable refresh tokens, and protected-route tests exist. Email verification, account-management UI, suspension administration, and immediate revocation of already-issued access tokens remain open. |
 | README and local run instructions exist | Done | Root README documents setup, verification, and known limitations. |
-| CI pipeline is green | Done | The owner reports all GitHub Actions CI checks passed for the current Sprint 1 changes. |
+| CI pipeline is green | Done | The owner reports the latest GitHub Actions workflow passed after the AuthController fix was committed and pushed. |
 | Seed script and sample users/documents exist | Not done | No seed script or demo accounts/documents are included. |
 | Secure deployment target exists | Not done | AWS is the selected provider and `ap-southeast-2` is the requested Region, but no AWS application resources or public deployment exist. The reported $100 credits are not a monthly spending cap. |
 | AWS Agent Toolkit is usable with the project's AWS profile | Partial | AWS CLI v2 and `uv` are installed, `trustvault-dev` sign-in succeeded, and the skill catalog returned 119 skills. The setup wizard was not run because the workspace already has a remote HTTP AWS MCP endpoint that must not be overwritten. See [deployment prerequisites](./deployment.md#aws-agent-toolkit-setup). |
@@ -36,11 +36,11 @@ The TV-002 authentication slice is complete: account registration, password
 login, short-lived JWTs, default Viewer role, failed-login lockout, IP-based
 request limiting, and a minimal Angular sign-in/register interface. The owner
 manually verified registration, sign-out, and sign-in in the local browser.
-All local checks passed, and the owner reports that all GitHub Actions CI
-checks passed. This does not complete every originally planned Sprint 1 item:
-refresh-token rotation, suspension administration and revocation of
-already-issued access tokens, email verification, and security-event audit
-records remain open.
+Refresh-token rotation and revocation were added in a later increment and have
+automated coverage. All local checks passed, and the owner reports that all
+GitHub Actions CI checks passed. Suspension administration, revocation of
+already-issued access tokens, email verification, and authentication security
+event auditing remain open.
 
 ### Sprint 2 progress: secure document lifecycle and named-user access
 
@@ -88,9 +88,9 @@ or real documents are involved.
   production build pass. Owner-guided manual
   verification remains.
 
-**Still out of scope:** document deletion, refresh-token rotation, malware
-scanning, AWS provisioning, and production deployment. Keep storage behind a private
-provider boundary; choose and validate the production AWS storage service only
+**Still out of scope:** malware scanning, AWS provisioning, and production
+deployment. Keep storage behind a private provider boundary; choose and validate
+the production AWS storage service only
 after deployment prerequisites and cost are confirmed. The current local
 development storage must not be presented as production-ready.
 
@@ -100,10 +100,10 @@ retrievable document; permitted and denied attempts are represented in audit
 records; no secrets or real confidential files are used in tests; and docs
 accurately state remaining audit-integrity and deployment gaps.
 
-**Next slices:** external audit protection and a restricted runtime database
-role from TV-009; TV-003a for refresh-token lifecycle. Revisit ordering if
-estimates change while retaining per-request authorization and cross-user
-denial tests as security gates.
+**Next slices:** restricted runtime database privileges from TV-009, followed
+by external audit anchoring as a separate task. Refresh-token rotation and
+revocation have since been implemented. Retain per-request authorization and
+cross-user denial tests as security gates.
 
 ### Sprint 3: permission clarity and audit-chain verification
 
@@ -151,6 +151,101 @@ handling have been independently assessed.
 | TV-009 | Append-only hash-chained audit writes and admin queries | 13 |
 | TV-010 | Angular authentication, document, permission, and activity views | 13 |
 | TV-011 | Threat tests, deployment, operational documentation, demo | 13 |
+
+### Sprint 4: database access hardening
+
+**Status:** Implemented and locally verified; GitHub Actions validation is
+pending. The changes do not deploy AWS resources or change the hosting decision.
+
+**Timebox:** One day; estimate 8 points. Carry unfinished work forward rather
+than weakening a privilege or security acceptance criterion.
+
+**Goal:** Give the API a dedicated PostgreSQL runtime role with only the
+permissions required by normal application workflows. Keep schema ownership
+and migrations on a separate migrator role, and make audit events append-only
+for the runtime role at the database privilege layer as well as in application
+code.
+
+**Scope**
+
+- Provision separate, repeatable local/CI database roles and credentials:
+  a controlled migrator role that owns schema objects, and a non-owner API
+  runtime role. Keep production credentials outside source control and all
+  database credentials out of frontend assets; label local-only values clearly.
+- Give the migrator the ownership/DDL permissions required to create and
+  upgrade the schema. Configure the API and design-time migration tooling to
+  use the appropriate credential explicitly; do not silently fall back to
+  migration-owner credentials at API startup.
+- Grant the runtime role only the connection, schema usage, and table
+  operations needed by Identity, document/grant/version workflows, and audit
+  reads/appends. Do not grant schema creation, table ownership, role
+  administration, or audit-event update/delete/truncate privileges.
+- Preserve the database append-only trigger and ensure the API runtime role
+  owns neither the audit table nor its trigger function. Treat role setup and
+  grants as part of reproducible local setup and CI.
+- Document which credential is used by the API, migrator, and EF design-time
+  tooling, plus how local developers configure them without committing secrets.
+
+**Acceptance criteria**
+
+1. A clean local database can be initialized and migrated using only the
+   migrator credential; the API can then start using only the runtime
+   credential.
+2. CI provisions both roles, runs migrations with the migrator credential, and
+   runs API integration tests with the restricted runtime credential.
+3. Representative authenticated flows still succeed under the runtime role:
+   registration/login/refresh/logout, document upload/read/edit/delete,
+   grant/revoke, version access, and audit append/read/verification.
+4. Database-level tests using the runtime role prove schema/table DDL and
+   audit-event UPDATE, DELETE, and TRUNCATE are rejected; the runtime role is
+   not a table owner, superuser, role administrator, or member of a role that
+   grants those capabilities.
+5. Document deletion and its grant/version cleanup still work, while audit
+   history remains present and immutable.
+6. The migrator still applies migrations to an empty database and upgrades an
+   existing database; API startup does not run migrations and fails clearly if
+   only the migrator connection setting is configured.
+7. Format, build, backend tests, frontend lint/tests/build, and container build
+   pass in CI. Documentation reflects the actual credential setup and any
+   remaining privilege limitations.
+
+**Out of scope:** AWS resource provisioning, production secret-manager
+integration, external audit anchoring, malware scanning, and public deployment.
+Do not use real confidential documents. Do not claim the audit chain is
+tamper-proof: a sufficiently privileged database owner/operator can still
+rewrite the database, and external anchoring remains a separate follow-up.
+
+### Remaining-gap roadmap
+
+The order below makes each stage a prerequisite or release gate for the next;
+it is a planning sequence, not a promise that every item fits in one sprint.
+
+1. **Sprint 4 — Database access hardening (implemented locally; CI pending).**
+   Separate runtime and migration credentials, verify least privilege in
+   local/CI PostgreSQL, and retain migration/upgrade coverage.
+2. **Private document pipeline.** Replace local-only filesystem storage with a
+   durable private storage provider behind `IPrivateDocumentStorage`. Add a
+   quarantine/scan state so a document is not downloadable until malware
+   scanning returns clean; scanner errors or timeouts must fail closed. Test
+   authorization, revocation, versioning, cleanup, and denied/pending access.
+   Choose AWS services only during a separately reviewed design step.
+3. **Identity and audit assurance.** Add email verification, password
+   recovery, administrative suspension and an explicit policy for already
+   issued access-token revocation. Independently anchor audit-chain checkpoints
+   outside the application database's administrative boundary; prove that
+   altered, removed, or rewritten history is detected without claiming that a
+   database-only hash chain is tamper-proof.
+4. **Deployment design and approval gate.** Confirm the project Region in AWS
+   Settings, spend limit and billing status, service eligibility, networking,
+   backup/restore expectations, and a complete cost estimate. Keep Regional
+   resources in `ap-southeast-2`. No provisioning begins before the design and
+   expected recurring costs are approved.
+5. **Production deployment and operations.** Publish an immutable CI image and
+   deploy only after the preceding security gates pass. Isolate the API,
+   database, and constrained Word converter; inject runtime/migrator secrets
+   separately; configure HTTPS, health checks, alerts, backups, restore
+   exercises, cleanup, and incident/runbook procedures. Do not upload
+   confidential documents until those checks pass.
 
 ## TV-001 acceptance and security tests
 
