@@ -20,6 +20,9 @@ services by following earlier copies of this plan.
   memory, process, and temporary-storage limits.
 - GitHub Actions builds and tests the project and builds the container image.
   It does not publish the image to a registry or deploy it to AWS.
+- The API exposes an anonymous readiness probe at `/api/system/ready` for a
+  load balancer or container orchestrator. It returns only a ready/not-ready
+  status and HTTP 503 when PostgreSQL cannot be reached.
 - The backend uses PostgreSQL. AWS database selection and network design have
   not been completed.
 - Sprint 4 now separates the PostgreSQL migrator and runtime roles in local

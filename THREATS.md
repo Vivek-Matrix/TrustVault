@@ -8,7 +8,7 @@ yet implemented.
 
 | Threat | Current control | Status / next validation |
 |---|---|---|
-| Anonymous access to an accidentally added API route | Global authenticated-user fallback policy; explicit anonymous metadata only for health/OpenAPI | Covered for the protected smoke route by an integration test. Add denial tests for every document operation as those routes are built. |
+| Anonymous access to an accidentally added API route | Global authenticated-user fallback policy; explicit anonymous metadata only for health/readiness and development OpenAPI. Readiness exposes only whether PostgreSQL is reachable. | Covered for the protected smoke route by an integration test. Add denial tests for every document operation as those routes are built. |
 | Forged, expired, wrong-issuer, or wrong-audience bearer token | JWT signature, issuer, audience, and lifetime validation | Valid-token and anonymous smoke tests exist; negative token variants are not covered yet. |
 | Guessing another document's identifier (IDOR) | List, metadata, and download require ownership or an active named-user grant; unauthorized and unknown IDs both return 404 | Integration tests cover owner denial, shared read/download, and denied attempts. Run them against local PostgreSQL before relying on the result. |
 | Revoked access remains usable | Active grant is checked on each list/metadata/download request; revocation history is retained | Integration tests verify access stops after revocation. Already-downloaded copies cannot be recalled. |

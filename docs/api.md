@@ -30,7 +30,7 @@ anonymous. The browser's route guards are not an authorization boundary.
 | POST | `/api/documents/{id}/grants` | Document owner | Grant `READ` or `EDIT` access to an existing account by email |
 | DELETE | `/api/documents/{id}/grants/{userId}` | Document owner | Revoke that user's active grant; retain grant history |
 | GET | `/api/system/health` | Anonymous | Process health probe |
-| GET | `/api/system/ready` | Any authenticated JWT | Readiness probe; returns 503 when PostgreSQL cannot be reached |
+| GET | `/api/system/ready` | Anonymous; returns only ready/not-ready status | Readiness probe for deployment health checks; returns 503 when PostgreSQL cannot be reached |
 | GET | `/api/system/whoami` | Any authenticated JWT | Return the caller's subject and role claims |
 | GET | `/swagger` | Anonymous, Development only | Development API documentation |
 

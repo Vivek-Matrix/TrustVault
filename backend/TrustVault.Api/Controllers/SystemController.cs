@@ -12,6 +12,7 @@ public sealed class SystemController : ControllerBase
     [HttpGet("health")]
     public IActionResult Health() => Ok(new { status = "ok" });
 
+    [AllowAnonymous]
     [HttpGet("ready")]
     public async Task<IActionResult> Ready(
         [FromServices] ApplicationDbContext database,

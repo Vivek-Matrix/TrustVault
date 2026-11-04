@@ -45,11 +45,17 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Readiness_endpoint_rejects_anonymous_requests()
+    public async Task Readiness_endpoint_is_anonymous_and_reports_database_state()
     {
         var response = await _client.GetAsync("/api/system/ready");
 
-        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Contains(
+            response.StatusCode,
+            new[]
+            {
+                System.Net.HttpStatusCode.OK,
+                System.Net.HttpStatusCode.ServiceUnavailable
+            });
     }
 
     [Fact]
