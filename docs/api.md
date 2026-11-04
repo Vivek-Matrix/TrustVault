@@ -10,6 +10,7 @@ anonymous. The browser's route guards are not an authorization boundary.
 | POST | `/api/auth/refresh` | Anonymous; 10 requests/minute/IP | Rotate a valid refresh token and issue a new access/refresh token pair |
 | POST | `/api/auth/logout` | Authenticated | Revoke the caller's refresh token |
 | POST | `/api/documents` | Authenticated owner | Upload a supported file; ownership is taken from the signed-in identity |
+| POST | `/api/documents/{id}/scan/retry` | Document owner | Retry a pending or failed scan |
 | GET | `/api/documents` | Owner or active grantee | List non-deleted documents owned by or shared with the caller |
 | GET | `/api/documents/{id}` | Owner or active grantee | Read metadata; other users receive 404 |
 | GET | `/api/documents/{id}/audits` | Owner or active grantee | View document creation, read, and edit activity with actor, result, and UTC timestamp |
@@ -21,6 +22,7 @@ anonymous. The browser's route guards are not an authorization boundary.
 | PUT | `/api/documents/{id}/content` | Owner or active EDIT grantee | Replace the PDF; optionally clear previous versions for redaction |
 | GET | `/api/documents/{id}/versions` | Owner or active grantee | List saved previous PDF versions |
 | GET | `/api/documents/{id}/versions/{version}/content` | Owner or active grantee | Download a saved previous PDF version |
+| POST | `/api/documents/{id}/versions/{version}/scan/retry` | Document owner | Retry a pending or failed scan for a saved version |
 | GET | `/api/documents/{id}/grants` | Document owner | List active named-user grants |
 | POST | `/api/documents/{id}/grants` | Document owner | Grant `READ` or `EDIT` access to an existing account by email |
 | DELETE | `/api/documents/{id}/grants/{userId}` | Document owner | Revoke that user's active grant; retain grant history |
@@ -45,9 +47,28 @@ to 10 MiB. The server validates the extension and a format-specific signature
 and stores the file in the configured private filesystem directory (default:
 `backend/TrustVault.Api/App_Data/documents`). MIME types supplied by the client
 are not trusted. The client cannot set the owner or storage key. The current
-filesystem provider is for local development only; it is not durable production
-storage and files are not scanned for malware. The in-app page editor and
-content-replacement endpoint remain PDF-only.
+filesystem provider and ClamAV service are local development components only;
+they are not durable production storage or an approved production scanning
+design. New uploads receive `PENDING_SCAN` until scanning produces `CLEAN`,
+`REJECTED`, or `SCAN_FAILED`. Scan failures are logged and remain unavailable;
+owners can retry pending or failed scans. A scan in progress is represented by
+`SCANNING`; stale scans can be retried after ten minutes. Existing documents and
+versions are migrated to `PENDING_SCAN` and must pass a scan before use.
+
+Only content with status `CLEAN` can be downloaded, read for editing, or
+changed. This applies to current files and saved versions; pending, rejected,
+failed, and in-progress scan states are denied with HTTP 409. A replacement or
+edit candidate is scanned before it becomes active; a rejected candidate returns
+422, and an unavailable scanner returns 503 without replacing the existing
+clean content. Uploads are persisted with their final scan state so a client
+does not need to guess whether an error caused a duplicate upload. The
+in-app page editor and content-replacement endpoint remain PDF-only.
+
+For local development, Docker Compose starts a ClamAV daemon bound to
+`127.0.0.1:3310`; configure `MalwareScanning:ClamAv:Host`,
+`MalwareScanning:ClamAv:Port`, and `MalwareScanning:ClamAv:TimeoutSeconds` for
+other local arrangements. ClamAV may need time to download signatures after its
+first start. A scanner connection failure never marks a file clean.
 
 TXT content is editable in the browser. Editing DOC/DOCX requires the separate
 LibreOffice converter service on the private converter network. It receives
@@ -63,14 +84,14 @@ original DOC as a previous version. Never expose the converter service publicly
 or attach it to the database or document-storage network.
 
 Upload, list, metadata-read, download, metadata-update, text-edit read/save,
-content-replacement, version, grant, revoke, and denied access attempts are
+content-replacement, version, scan retry, grant, revoke, and denied access attempts are
 written to the append-only audit table with a serialized SHA-256 hash chain.
 Database transactions serialize audit appends. This is not a claim of
 tamper-proof evidence: the local verifier checks the records currently present.
 The local/CI API role cannot alter the schema or update, delete, or truncate
 audit records; production must provision the same role separation. External
 anchoring remains missing.
-The document Audits control displays successful and denied creation/read/edit
+The Document audits control displays successful and denied creation/read/edit/scan
 events with the actor's email and timestamp in the viewer's local time. Only
 the owner and users with an active document grant can view that history;
 revoking a grant also revokes audit-history access.

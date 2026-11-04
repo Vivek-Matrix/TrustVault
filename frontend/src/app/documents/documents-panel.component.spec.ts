@@ -24,6 +24,9 @@ describe('DocumentsPanelComponent', () => {
     updatedAtUtc: '2026-11-03T00:00:00Z',
     isOwner: true,
     permission: null,
+    scanStatus: 'CLEAN',
+    scanAttemptCount: 1,
+    lastScanAtUtc: '2026-11-03T00:00:00Z',
   };
 
   beforeEach(() => {
@@ -151,7 +154,42 @@ describe('DocumentsPanelComponent', () => {
     fixture.detectChanges();
 
     expect(component.documents()).toEqual([documentItem]);
-    expect(component.message()).toBe('test.pdf was uploaded.');
+    expect(component.message()).toBe('test.pdf was uploaded and passed the malware scan.');
+    fixture.destroy();
+  });
+
+  it('blocks actions and offers a retry for an owner when scanning failed', () => {
+    const fixture = TestBed.createComponent(DocumentsPanelComponent);
+    fixture.detectChanges();
+    const failedDocument = {
+      ...documentItem,
+      scanStatus: 'SCAN_FAILED' as const,
+      scanAttemptCount: 1,
+    };
+    http.expectOne(`${environment.apiBaseUrl}/documents`).flush([failedDocument]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.download-button').disabled).toBeTrue();
+    expect(fixture.nativeElement.querySelector('.edit-button')).toBeNull();
+    const retryButton = fixture.nativeElement.querySelector(
+      '.retry-scan-button',
+    ) as HTMLButtonElement;
+    expect(retryButton).not.toBeNull();
+    retryButton.click();
+
+    const retryRequest = http.expectOne(
+      `${environment.apiBaseUrl}/documents/${failedDocument.id}/scan/retry`,
+    );
+    expect(retryRequest.request.method).toBe('POST');
+    retryRequest.flush({
+      scanStatus: 'CLEAN',
+      scanAttemptCount: 2,
+      lastScanAtUtc: '2026-11-04T00:00:00Z',
+    });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.documents()[0].scanStatus).toBe('CLEAN');
+    expect(fixture.nativeElement.querySelector('.download-button').disabled).toBeFalse();
     fixture.destroy();
   });
 

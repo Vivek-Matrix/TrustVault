@@ -57,7 +57,7 @@ See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 From the repository root in PowerShell:
 
 ```powershell
-docker compose up -d --build --force-recreate postgres converter converter-dev-proxy
+docker compose up -d --build --force-recreate postgres clamav converter converter-dev-proxy
 docker compose exec -T postgres psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-setup-roles.sql
 # The role setup script uses local-only passwords; never reuse them outside Compose.
 $env:ConnectionStrings__TrustVault = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local"
@@ -108,9 +108,13 @@ EDIT also permits changing title/details, editing TXT/Word text, editing PDF
 pages, and replacing a PDF.
 Uploads are limited to 10 MiB. The server validates the extension and
 format-specific signature or structure, then stores files under an opaque
-generated key outside the static web root. TXT files must use UTF-8 or Unicode
-with a byte-order mark. The current filesystem provider is for local development
-only. Use dummy files, not confidential documents.
+generated key outside the static web root and scans them with the local ClamAV
+service. Download and edit are enabled only when the scan status is `CLEAN`;
+failed scans can be retried by the owner. TXT files must use UTF-8 or Unicode
+with a byte-order mark. The current filesystem provider and local scanner
+configuration are for development only; they are not a production storage or
+scanning design. Use dummy files, not confidential documents. Wait for a
+`CLEAN` status before downloading or editing.
 
 For local development, the API reaches the converter through a resource-limited
 Nginx relay bound to `127.0.0.1:6100`. The converter itself has no published
@@ -124,8 +128,10 @@ for production.
    `npm start`.
 3. Open `http://localhost:4200`, create an account, and sign in.
 4. In **Documents**, enter a title/category, choose a small dummy PDF, TXT,
-   DOC, or DOCX file, and select **Upload file**. The uploaded file appears in
-   your list; use **Download** to save it. Choose **Edit** to edit TXT or Word
+   DOC, or DOCX file, and select **Upload file**. Wait for the scan status to
+   show `clean`; if it shows `scan failed`, confirm the local ClamAV service is
+   ready and select **Retry scan**. Only clean files can be downloaded or
+   edited. Choose **Edit** to edit TXT or Word
    text, or to open the page editor for a PDF. The converter service must be
    running to edit Word files.
 5. Sign out, create a second test account, and confirm its document list is
@@ -227,9 +233,12 @@ replace text areas, redact, reorder/remove pages, or replace the PDF. Page edits
 are flattened to images, so text search, links, forms, signatures, and
 accessibility features are lost. Redaction clears app-accessible previous
 versions but cannot erase external backups or copies already downloaded.
-Malware scanning, email verification, password recovery, user suspension
-management, production storage, independent audit anchoring, and production DB
-role provisioning remain follow-up work. Local and CI use separate migrator
+Production malware-scanning and durable-storage choices, email verification,
+password recovery, user suspension management, independent audit anchoring,
+and production DB role provisioning remain follow-up work. Locally, uploads
+are synchronously scanned by ClamAV; pending, rejected, and failed files are
+blocked from download and editing. Existing documents are migrated to a
+pending scan state and must be rescanned before use. Local and CI use separate migrator
 and restricted runtime database roles; production credentials still need
 separate provisioning. Refresh tokens are issued, rotated, and revoked
 server-side, while the browser keeps the access token in memory only. An endpoint

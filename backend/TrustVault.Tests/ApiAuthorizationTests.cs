@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Security;
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using System.Xml.Linq;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Identity;
@@ -16,6 +17,7 @@ using Microsoft.IdentityModel.Tokens;
 using TrustVault.Api.Models.Auth;
 using TrustVault.Api.Models.Documents;
 using TrustVault.Api.Services;
+using TrustVault.Application.Documents;
 using TrustVault.Domain.Security;
 using TrustVault.Infrastructure.Persistence;
 using TrustVault.Infrastructure.Persistence.Entities;
@@ -325,6 +327,256 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
         using var download = await _client.SendAsync(downloadRequest);
         Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
         Assert.Equal(PdfBytes, await download.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Upload_rejection_and_scanner_failure_are_not_available_for_download_or_editing()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+
+        using var rejectedUpload = await UploadFileAsync(
+            owner.AccessToken,
+            "rejected.pdf",
+            Encoding.ASCII.GetBytes("%PDF-1.7\nREJECT_TEST"));
+        Assert.Equal(System.Net.HttpStatusCode.Created, rejectedUpload.StatusCode);
+        var rejected = await rejectedUpload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(rejected);
+        Assert.Equal("REJECTED", rejected.ScanStatus);
+
+        using var rejectedDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{rejected.Id}/content",
+            owner);
+        using var rejectedDownload = await _client.SendAsync(rejectedDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, rejectedDownload.StatusCode);
+
+        using var rejectedEditRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{rejected.Id}",
+            owner,
+            JsonContent.Create(new
+            {
+                title = "Must stay blocked",
+                description = (string?)null,
+                category = "Test"
+            }));
+        using var rejectedEdit = await _client.SendAsync(rejectedEditRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, rejectedEdit.StatusCode);
+
+        using var failedUpload = await UploadFileAsync(
+            owner.AccessToken,
+            "scanner-failed.pdf",
+            Encoding.ASCII.GetBytes("%PDF-1.7\nSCAN_FAIL_ALWAYS"));
+        Assert.Equal(System.Net.HttpStatusCode.Created, failedUpload.StatusCode);
+        var failed = await failedUpload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(failed);
+        Assert.Equal("SCAN_FAILED", failed.ScanStatus);
+
+        using var failedDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{failed.Id}/content",
+            owner);
+        using var failedDownload = await _client.SendAsync(failedDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, failedDownload.StatusCode);
+
+        using var retryRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{failed.Id}/scan/retry",
+            owner);
+        using var retry = await _client.SendAsync(retryRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, retry.StatusCode);
+        var retryResult = await retry.Content.ReadFromJsonAsync<DocumentScanStatusResponse>();
+        Assert.NotNull(retryResult);
+        Assert.Equal("SCAN_FAILED", retryResult.ScanStatus);
+        Assert.Equal(2, retryResult.ScanAttemptCount);
+
+        using var retryAfterFailureRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{rejected.Id}/scan/retry",
+            owner);
+        using var retryAfterFailure = await _client.SendAsync(retryAfterFailureRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, retryAfterFailure.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var uploadAudit = await database.AuditEvents
+            .AsNoTracking()
+            .Where(item => item.DocumentId == rejected.Id
+                && item.Action == "document.upload")
+            .SingleAsync();
+        using var auditMetadata = JsonDocument.Parse(uploadAudit.MetadataJson);
+        Assert.Equal(
+            "REJECTED",
+            auditMetadata.RootElement.GetProperty("scanStatus").GetString());
+        Assert.Equal(TrustVault.Domain.Audit.AuditResult.Denied, uploadAudit.Result);
+    }
+
+    [Fact]
+    public async Task Failed_replacement_is_not_activated_and_prior_clean_version_remains_available()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var replacementRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}/content",
+            owner,
+            CreatePdfContent(
+                "failed-replacement.pdf",
+                Encoding.ASCII.GetBytes("%PDF-1.7\nSCAN_FAIL_ALWAYS")));
+        using var replacement = await _client.SendAsync(replacementRequest);
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, replacement.StatusCode);
+
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            owner);
+        using var download = await _client.SendAsync(downloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal(PdfBytes, await download.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Rejected_text_edit_does_not_replace_the_clean_document()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        using var upload = await UploadFileAsync(
+            owner.AccessToken,
+            "notes.txt",
+            Encoding.UTF8.GetBytes("original text"));
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var editRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}/editable-text",
+            owner,
+            JsonContent.Create(new { text = "REJECT_TEST" }));
+        using var edit = await _client.SendAsync(editRequest);
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, edit.StatusCode);
+
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            owner);
+        using var download = await _client.SendAsync(downloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal(
+            "original text",
+            Encoding.UTF8.GetString(await download.Content.ReadAsByteArrayAsync()));
+    }
+
+    [Fact]
+    public async Task Failed_scan_can_be_retried_to_clean_and_downloaded()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        using var upload = await UploadFileAsync(
+            owner.AccessToken,
+            "retry.pdf",
+            Encoding.ASCII.GetBytes("%PDF-1.7\nRETRY_TO_CLEAN"));
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+        Assert.Equal("SCAN_FAILED", document.ScanStatus);
+
+        using var retryRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/scan/retry",
+            owner);
+        using var retry = await _client.SendAsync(retryRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, retry.StatusCode);
+        var result = await retry.Content.ReadFromJsonAsync<DocumentScanStatusResponse>();
+        Assert.NotNull(result);
+        Assert.Equal("CLEAN", result.ScanStatus);
+        Assert.Equal(2, result.ScanAttemptCount);
+
+        using var downloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            owner);
+        using var download = await _client.SendAsync(downloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, download.StatusCode);
+    }
+
+    [Fact]
+    public async Task Pending_document_and_version_are_blocked_until_owner_retries_scan()
+    {
+        var owner = await RegisterAndGetSessionAsync();
+        using var upload = await UploadPdfAsync(owner);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var replacementRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}/content",
+            owner,
+            CreatePdfContent(
+                "replacement.pdf",
+                Encoding.ASCII.GetBytes("%PDF-1.7\nreplacement")));
+        using var replacement = await _client.SendAsync(replacementRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, replacement.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var database = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var storedDocument = await database.Documents.SingleAsync(item => item.Id == document.Id);
+            storedDocument.ScanStatus = TrustVault.Domain.Documents.DocumentScanStatus.PendingScan;
+            var storedVersion = await database.DocumentVersions
+                .SingleAsync(item => item.DocumentId == document.Id);
+            storedVersion.ScanStatus = TrustVault.Domain.Documents.DocumentScanStatus.PendingScan;
+            await database.SaveChangesAsync();
+        }
+
+        using var blockedDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            owner);
+        using var blockedDownload = await _client.SendAsync(blockedDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, blockedDownload.StatusCode);
+
+        using var blockedEditRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{document.Id}",
+            owner,
+            JsonContent.Create(new
+            {
+                title = "Must stay blocked",
+                description = (string?)null,
+                category = "Test"
+            }));
+        using var blockedEdit = await _client.SendAsync(blockedEditRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, blockedEdit.StatusCode);
+
+        var otherUser = await RegisterAndGetSessionAsync();
+        using var unauthorizedRetryRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/scan/retry",
+            otherUser);
+        using var unauthorizedRetry = await _client.SendAsync(unauthorizedRetryRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, unauthorizedRetry.StatusCode);
+
+        using var retryDocumentRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/scan/retry",
+            owner);
+        using var retryDocument = await _client.SendAsync(retryDocumentRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, retryDocument.StatusCode);
+
+        using var retryVersionRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/versions/1/scan/retry",
+            owner);
+        using var retryVersion = await _client.SendAsync(retryVersionRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, retryVersion.StatusCode);
+
+        using var versionDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/versions/1/content",
+            owner);
+        using var versionDownload = await _client.SendAsync(versionDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, versionDownload.StatusCode);
+        Assert.Equal(PdfBytes, await versionDownload.Content.ReadAsByteArrayAsync());
     }
 
     [Fact]
@@ -1355,6 +1607,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         testSettings["Storage__RootPath"] = _storageRoot;
         testSettings["ConnectionStrings__TrustVault"] =
             "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local";
+        var testConnectionString = Environment.GetEnvironmentVariable("TRUSTVAULT_TEST_CONNECTION");
+        if (!string.IsNullOrWhiteSpace(testConnectionString))
+        {
+            testSettings["ConnectionStrings__TrustVault"] = testConnectionString;
+        }
+
         _previousEnvironmentValues = testSettings.Keys.ToDictionary(
             name => name,
             Environment.GetEnvironmentVariable);
@@ -1372,6 +1630,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             services.RemoveAll<IDocumentTextConverter>();
             services.AddSingleton<IDocumentTextConverter, ApiFactory.TestDocumentTextConverter>();
+            services.RemoveAll<IPrivateDocumentScanner>();
+            services.AddSingleton<IPrivateDocumentScanner, TestDocumentScanner>();
         });
     }
 
@@ -1418,5 +1678,36 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
         public Task<byte[]> CreateDocxAsync(string text, CancellationToken cancellationToken) =>
             Task.FromResult(ApiAuthorizationTests.CreateDocxBytesForTest(text));
+    }
+
+    public sealed class TestDocumentScanner : IPrivateDocumentScanner
+    {
+        private readonly ConcurrentDictionary<string, int> _retryAttempts = new();
+
+        public async Task<DocumentScanVerdict> ScanAsync(
+            Stream content,
+            CancellationToken cancellationToken)
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            var text = Encoding.ASCII.GetString(buffer.ToArray());
+            if (text.Contains("REJECT_TEST", StringComparison.Ordinal))
+            {
+                return DocumentScanVerdict.Rejected;
+            }
+
+            if (text.Contains("SCAN_FAIL_ALWAYS", StringComparison.Ordinal))
+            {
+                throw new IOException("Test scanner is unavailable.");
+            }
+
+            if (text.Contains("RETRY_TO_CLEAN", StringComparison.Ordinal)
+                && _retryAttempts.AddOrUpdate(text, 1, (_, attempts) => attempts + 1) == 1)
+            {
+                throw new IOException("Test scanner is temporarily unavailable.");
+            }
+
+            return DocumentScanVerdict.Clean;
+        }
     }
 }

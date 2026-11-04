@@ -10,4 +10,7 @@ public sealed record DocumentResponse(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     bool IsOwner,
-    string? Permission);
+    string? Permission,
+    string ScanStatus,
+    int ScanAttemptCount,
+    DateTime? LastScanAtUtc);

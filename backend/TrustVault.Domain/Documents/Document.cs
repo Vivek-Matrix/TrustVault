@@ -14,6 +14,9 @@ public sealed class Document
     public DateTime CreatedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
     public bool IsDeleted { get; set; }
+    public DocumentScanStatus ScanStatus { get; set; } = DocumentScanStatus.PendingScan;
+    public int ScanAttemptCount { get; set; }
+    public DateTime? LastScanAtUtc { get; set; }
     public ICollection<DocumentGrant> Grants { get; set; } = new List<DocumentGrant>();
     public ICollection<DocumentVersion> Versions { get; set; } = new List<DocumentVersion>();
 }

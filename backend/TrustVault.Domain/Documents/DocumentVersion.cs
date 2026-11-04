@@ -11,4 +11,7 @@ public sealed class DocumentVersion
     public long SizeBytes { get; set; }
     public Guid UploadedByUserId { get; set; }
     public DateTime CreatedAtUtc { get; set; }
+    public DocumentScanStatus ScanStatus { get; set; } = DocumentScanStatus.PendingScan;
+    public int ScanAttemptCount { get; set; }
+    public DateTime? LastScanAtUtc { get; set; }
 }

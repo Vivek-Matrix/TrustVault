@@ -155,7 +155,8 @@ handling have been independently assessed.
 ### Sprint 4: database access hardening
 
 **Status:** Implemented and locally verified; GitHub Actions validation is
-pending. The changes do not deploy AWS resources or change the hosting decision.
+confirmed successful by the owner. The changes do not deploy AWS resources or
+change the hosting decision.
 
 **Timebox:** One day; estimate 8 points. Carry unfinished work forward rather
 than weakening a privilege or security acceptance criterion.
@@ -215,20 +216,49 @@ Do not use real confidential documents. Do not claim the audit chain is
 tamper-proof: a sufficiently privileged database owner/operator can still
 rewrite the database, and external anchoring remains a separate follow-up.
 
+### Sprint 5: private document pipeline
+
+**Status:** Implemented locally; Sprint 5 changes still require CI validation.
+No cloud resources were provisioned.
+
+**Goal:** Keep private files unavailable until a scanner returns a clean
+verdict, and ensure failures remain visible and retryable without changing
+authorization, version, revocation, deletion, or audit behavior.
+
+- Persist scan status, attempt count, and last scan time for current documents
+  and saved versions. Existing files are migrated to pending scan.
+- Scan uploads and replacement/edit candidates before activation. A rejected
+  or failed candidate cannot replace previously clean content.
+- Block downloads and content/metadata editing unless the relevant document or
+  version is clean. Owners can retry pending/failed scans; stale scanning claims
+  can be retried after ten minutes.
+- Run a loopback-only ClamAV daemon in local Compose with resource limits.
+  Scanner errors and timeouts fail closed. Use deterministic scanner doubles
+  and dummy files in tests.
+- Keep filesystem storage and ClamAV as local-development providers only.
+  Durable production storage and its scanner execution/isolation design remain
+  a separately reviewed decision; no AWS services are selected or provisioned.
+- Update setup, API, threat, architecture, and deployment documentation.
+
+**Definition of done:** Integration tests cover clean/rejected/failed uploads,
+retry success and failure, pending and failed access denial, version scan state,
+candidate replacement safety, authorization, deletion/revocation, and audit
+status. Backend tests, frontend lint/tests/build, migrations, and container
+build must pass. Do not use real confidential documents.
+
 ### Remaining-gap roadmap
 
 The order below makes each stage a prerequisite or release gate for the next;
 it is a planning sequence, not a promise that every item fits in one sprint.
 
-1. **Sprint 4 — Database access hardening (implemented locally; CI pending).**
+1. **Sprint 4 — Database access hardening (implemented; CI successful).**
    Separate runtime and migration credentials, verify least privilege in
    local/CI PostgreSQL, and retain migration/upgrade coverage.
-2. **Private document pipeline.** Replace local-only filesystem storage with a
-   durable private storage provider behind `IPrivateDocumentStorage`. Add a
-   quarantine/scan state so a document is not downloadable until malware
-   scanning returns clean; scanner errors or timeouts must fail closed. Test
-   authorization, revocation, versioning, cleanup, and denied/pending access.
-   Choose AWS services only during a separately reviewed design step.
+2. **Sprint 5 — Private document pipeline (implemented locally; CI pending).**
+   Persist per-document/version scan state; scan with local ClamAV; block access
+   unless clean; provide owner retries; preserve old clean content if a new
+   candidate scan fails. Choose durable production storage and scanning services
+   only during a separately reviewed design step.
 3. **Identity and audit assurance.** Add email verification, password
    recovery, administrative suspension and an explicit policy for already
    issued access-token revocation. Independently anchor audit-chain checkpoints

@@ -51,6 +51,12 @@ public sealed class ApplicationDbContext(
             entity.Property(document => document.OriginalFileName).HasMaxLength(255).IsRequired();
             entity.Property(document => document.ContentType).HasMaxLength(127).IsRequired();
             entity.Property(document => document.StorageKey).HasMaxLength(512).IsRequired();
+            entity.Property(document => document.ScanStatus)
+                .HasConversion(
+                    status => status.ToString().ToUpperInvariant(),
+                    status => Enum.Parse<DocumentScanStatus>(status, true))
+                .HasMaxLength(16)
+                .HasDefaultValue(DocumentScanStatus.PendingScan);
             entity.HasIndex(document => document.StorageKey).IsUnique();
             entity.HasIndex(document => new { document.OwnerId, document.CreatedAtUtc });
             entity.HasIndex(document => new { document.Category, document.CreatedAtUtc });
@@ -95,6 +101,12 @@ public sealed class ApplicationDbContext(
             entity.Property(version => version.StorageKey).HasMaxLength(512).IsRequired();
             entity.Property(version => version.OriginalFileName).HasMaxLength(255).IsRequired();
             entity.Property(version => version.ContentType).HasMaxLength(127).IsRequired();
+            entity.Property(version => version.ScanStatus)
+                .HasConversion(
+                    status => status.ToString().ToUpperInvariant(),
+                    status => Enum.Parse<DocumentScanStatus>(status, true))
+                .HasMaxLength(16)
+                .HasDefaultValue(DocumentScanStatus.PendingScan);
             entity.HasIndex(version => new { version.DocumentId, version.VersionNumber }).IsUnique();
             entity.HasOne<Document>()
                 .WithMany(document => document.Versions)

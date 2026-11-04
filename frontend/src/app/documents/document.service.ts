@@ -22,6 +22,9 @@ export interface DocumentItem {
   updatedAtUtc: string;
   isOwner: boolean;
   permission: 'READ' | 'EDIT' | null;
+  scanStatus: 'PENDING_SCAN' | 'SCANNING' | 'CLEAN' | 'REJECTED' | 'SCAN_FAILED';
+  scanAttemptCount: number;
+  lastScanAtUtc: string | null;
 }
 
 export interface DocumentGrantItem {
@@ -36,12 +39,21 @@ export interface DocumentVersionItem {
   originalFileName: string;
   sizeBytes: number;
   createdAtUtc: string;
+  scanStatus: 'PENDING_SCAN' | 'SCANNING' | 'CLEAN' | 'REJECTED' | 'SCAN_FAILED';
+  scanAttemptCount: number;
+  lastScanAtUtc: string | null;
+}
+
+export interface DocumentScanStatusItem {
+  scanStatus: 'PENDING_SCAN' | 'SCANNING' | 'CLEAN' | 'REJECTED' | 'SCAN_FAILED';
+  scanAttemptCount: number;
+  lastScanAtUtc: string | null;
 }
 
 export interface DocumentAuditItem {
   id: string;
   actorEmail: string | null;
-  activity: 'CREATED' | 'READ' | 'EDITED';
+  activity: 'CREATED' | 'READ' | 'EDITED' | 'SCANNED';
   result: 'SUCCESS' | 'DENIED';
   timestampUtc: string;
 }
@@ -88,6 +100,20 @@ export class DocumentService {
     return this.http.get(`${this.documentsUrl}/${encodeURIComponent(id)}/content`, {
       responseType: 'blob',
     });
+  }
+
+  retryScan(documentId: string): Observable<DocumentScanStatusItem> {
+    return this.http.post<DocumentScanStatusItem>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/scan/retry`,
+      {},
+    );
+  }
+
+  retryVersionScan(documentId: string, versionNumber: number): Observable<DocumentScanStatusItem> {
+    return this.http.post<DocumentScanStatusItem>(
+      `${this.documentsUrl}/${encodeURIComponent(documentId)}/versions/${versionNumber}/scan/retry`,
+      {},
+    );
   }
 
   listGrants(documentId: string): Observable<DocumentGrantItem[]> {

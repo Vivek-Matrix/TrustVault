@@ -43,8 +43,9 @@ services by following earlier copies of this plan.
   successfully applied migrations to its existing database. The named database
   volume was preserved. The migrator also succeeded against a separate empty
   PostgreSQL database, which was removed after verification.
-- The latest pushed CI run for commit `5db247e` succeeded. Later local edits are
-  uncommitted and have not been validated by GitHub Actions.
+- The owner confirmed the Sprint 4 CI workflow succeeded. Current Sprint 5
+  implementation changes are local and have not yet been validated by GitHub
+  Actions.
 
 ## AWS Agent Toolkit setup
 
@@ -102,9 +103,30 @@ only on the separate generated local server.
    service if a deployment is approved.
 5. Do not deploy confidential documents. Local login/token issuance,
    document authorization, revocation, and hash-chained audit writes are
-   implemented, but production private storage, malware scanning, independent
-   audit anchoring, and the production database-role configuration remain
-   unfinished.
+   implemented. Local document scans use ClamAV and block access unless clean,
+   but the local filesystem and scanner are not production providers.
+   Independent audit anchoring and production database-role configuration
+   remain unfinished.
+
+## Production document pipeline design gate
+
+The local implementation is not a production storage/scanner decision. Before
+provisioning production resources, review and approve a service-specific design
+and full cost estimate. The intended security behavior is:
+
+- Store uploads under opaque keys in private durable storage with a quarantine
+  area and no public access or direct client URLs.
+- Record `PENDING_SCAN`; an isolated scanner reads quarantined content and
+  reports a terminal `CLEAN`, `REJECTED`, or `SCAN_FAILED` result.
+- Only `CLEAN` current documents and versions can be downloaded or edited.
+  Keep rejected/failed content quarantined and support safe, auditable retries.
+- Serve clean content only through the API after live owner/grant authorization.
+  Keep scanning and object-storage credentials least-privileged and separate
+  from the API runtime and database migrator.
+- Decide durable storage, scanner service/isolation, retry/queue behavior,
+  retention/cleanup, observability, and backup/restore together. No AWS storage,
+  scanning, or hosting services have been selected or provisioned for this
+  design gate.
 
 ## Security-readiness roadmap
 
@@ -113,8 +135,9 @@ The implementation sequence and acceptance goals are tracked in the
 
 1. Complete Sprint 4 and verify the API role cannot perform schema DDL or
    mutate audit records.
-2. Implement private durable document storage and a fail-closed malware
-   scanning/quarantine flow; test it with dummy files.
+2. Approve and implement private durable document storage and a fail-closed
+   malware scanning/quarantine flow; test it with dummy files. The current
+   local ClamAV/filesystem pipeline is not the production design.
 3. Complete the required account-lifecycle controls and establish independent
    audit-chain anchoring.
 4. Approve an architecture and cost estimate for `ap-southeast-2`, after

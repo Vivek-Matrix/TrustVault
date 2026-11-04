@@ -123,6 +123,9 @@ const maximumFileBytes = 10 * 1024 * 1024;
               <div class="document-details">
                 <strong>{{ item.title }}</strong>
                 <span>{{ item.originalFileName }} · {{ item.category }} · {{ formatSize(item.sizeBytes) }}</span>
+                <span class="scan-status" [attr.data-status]="item.scanStatus">
+                  Scan: {{ formatScanStatus(item.scanStatus) }}
+                </span>
               </div>
               <div class="document-actions">
                 <button
@@ -130,11 +133,20 @@ const maximumFileBytes = 10 * 1024 * 1024;
                   type="button"
                   [attr.aria-label]="downloadingId() === item.id ? 'Downloading document' : 'Download document'"
                   [title]="downloadingId() === item.id ? 'Downloading...' : 'Download'"
-                  [disabled]="downloadingId() === item.id"
+                  [disabled]="downloadingId() === item.id || item.scanStatus !== 'CLEAN'"
                   (click)="downloadDocument(item)">
                   <span aria-hidden="true">{{ downloadingId() === item.id ? '…' : '↓' }}</span>
                 </button>
-                @if (canEdit(item)) {
+                @if (canRetryScan(item)) {
+                  <button
+                    class="secondary-button retry-scan-button"
+                    type="button"
+                    [disabled]="retryingScanId() === item.id"
+                    (click)="retryScan(item)">
+                    {{ retryingScanId() === item.id ? 'Scanning...' : 'Retry scan' }}
+                  </button>
+                }
+                @if (canEdit(item) && item.scanStatus === 'CLEAN') {
                   <button
                     class="secondary-button edit-button"
                     type="button"
@@ -189,7 +201,7 @@ const maximumFileBytes = 10 * 1024 * 1024;
                     @for (audit of audits(); track audit.id) {
                       <li class="audit-item">
                         <strong>
-                          {{ audit.activity === 'CREATED' ? 'Created' : audit.activity === 'EDITED' ? 'Edited' : 'Read' }}
+                          {{ audit.activity === 'CREATED' ? 'Created' : audit.activity === 'EDITED' ? 'Edited' : audit.activity === 'SCANNED' ? 'Scanned' : 'Read' }}
                         </strong>
                         <span>{{ audit.actorEmail ?? 'Unknown user' }}</span>
                         <span
@@ -282,6 +294,7 @@ export class DocumentsPanelComponent {
   readonly loading = signal(false);
   readonly uploading = signal(false);
   readonly downloadingId = signal<string | null>(null);
+  readonly retryingScanId = signal<string | null>(null);
   readonly deletingId = signal<string | null>(null);
   readonly selectedShareDocumentId = signal<string | null>(null);
   readonly selectedAuditDocumentId = signal<string | null>(null);
@@ -389,14 +402,18 @@ export class DocumentsPanelComponent {
           if (fileInput instanceof HTMLInputElement) {
             fileInput.value = '';
           }
-          this.message.set(`${file.name} was uploaded.`);
+          this.message.set(
+            uploaded.scanStatus === 'CLEAN'
+              ? `${file.name} was uploaded and passed the malware scan.`
+              : `${file.name} was uploaded with scan status ${this.formatScanStatus(uploaded.scanStatus)}. It is not available until it passes the scan.`,
+          );
         },
         error: (error: unknown) => this.error.set(this.describeError(error, 'upload this file')),
       });
   }
 
   downloadDocument(item: DocumentItem): void {
-    if (this.downloadingId()) {
+    if (this.downloadingId() || item.scanStatus !== 'CLEAN') {
       return;
     }
 
@@ -483,7 +500,49 @@ export class DocumentsPanelComponent {
   }
 
   canEdit(item: DocumentItem): boolean {
-    return item.isOwner || item.permission === 'EDIT';
+    return item.scanStatus === 'CLEAN' && (item.isOwner || item.permission === 'EDIT');
+  }
+
+  canRetryScan(item: DocumentItem): boolean {
+    const retryableStatus = item.scanStatus === 'PENDING_SCAN'
+      || item.scanStatus === 'SCAN_FAILED'
+      || (item.scanStatus === 'SCANNING'
+        && item.lastScanAtUtc !== null
+        && Date.now() - Date.parse(item.lastScanAtUtc) > 2 * 60 * 1000);
+    return item.isOwner && retryableStatus;
+  }
+
+  formatScanStatus(status: DocumentItem['scanStatus']): string {
+    return status.replaceAll('_', ' ').toLowerCase();
+  }
+
+  retryScan(item: DocumentItem): void {
+    if (!this.canRetryScan(item) || this.retryingScanId()) {
+      return;
+    }
+
+    this.error.set(null);
+    this.message.set(null);
+    this.retryingScanId.set(item.id);
+    this.documentService
+      .retryScan(item.id)
+      .pipe(finalize(() => this.retryingScanId.set(null)))
+      .subscribe({
+        next: (result) => {
+          this.documents.update((documents) =>
+            documents.map((document) =>
+              document.id === item.id ? { ...document, ...result } : document,
+            ),
+          );
+          this.message.set(
+            result.scanStatus === 'CLEAN'
+              ? `${item.originalFileName} passed the malware scan.`
+              : `Scan finished with status ${this.formatScanStatus(result.scanStatus)}.`,
+          );
+        },
+        error: (error: unknown) =>
+          this.error.set(this.describeError(error, 'retry the malware scan')),
+      });
   }
 
   isPdf(item: DocumentItem): boolean {

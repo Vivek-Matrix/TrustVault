@@ -245,6 +245,9 @@ namespace TrustVault.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
+                    b.Property<DateTime?>("LastScanAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("OriginalFileName")
                         .IsRequired()
                         .HasMaxLength(255)
@@ -252,6 +255,16 @@ namespace TrustVault.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("OwnerId")
                         .HasColumnType("uuid");
+
+                    b.Property<int>("ScanAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ScanStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("PENDINGSCAN");
 
                     b.Property<long>("SizeBytes")
                         .HasColumnType("bigint");
@@ -341,10 +354,23 @@ namespace TrustVault.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("DocumentId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("LastScanAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("OriginalFileName")
                         .IsRequired()
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
+
+                    b.Property<int>("ScanAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ScanStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("PENDINGSCAN");
 
                     b.Property<long>("SizeBytes")
                         .HasColumnType("bigint");

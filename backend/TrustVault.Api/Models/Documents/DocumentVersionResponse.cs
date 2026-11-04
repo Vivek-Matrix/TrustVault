@@ -4,4 +4,7 @@ public sealed record DocumentVersionResponse(
     int VersionNumber,
     string OriginalFileName,
     long SizeBytes,
-    DateTime CreatedAtUtc);
+    DateTime CreatedAtUtc,
+    string ScanStatus,
+    int ScanAttemptCount,
+    DateTime? LastScanAtUtc);

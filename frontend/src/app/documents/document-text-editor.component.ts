@@ -61,11 +61,23 @@ import { DocumentItem, DocumentService, DocumentVersionItem } from './document.s
             <ul>
               @for (version of versions(); track version.versionNumber) {
                 <li>
-                  <span>Version {{ version.versionNumber }} · {{ version.originalFileName }}</span>
+                  <span>
+                    Version {{ version.versionNumber }} · {{ version.originalFileName }}
+                    · Scan {{ version.scanStatus.toLowerCase().replaceAll('_', ' ') }}
+                  </span>
+                  @if (item().isOwner && canRetryVersionScan(version)) {
+                    <button
+                      class="secondary-button"
+                      type="button"
+                      [disabled]="retryingVersion() === version.versionNumber"
+                      (click)="retryPreviousVersionScan(version)">
+                      {{ retryingVersion() === version.versionNumber ? 'Scanning...' : 'Retry scan' }}
+                    </button>
+                  }
                   <button
                     class="secondary-button"
                     type="button"
-                    [disabled]="downloadingVersion() === version.versionNumber"
+                    [disabled]="downloadingVersion() === version.versionNumber || version.scanStatus !== 'CLEAN'"
                     (click)="downloadPreviousVersion(version)">
                     {{ downloadingVersion() === version.versionNumber ? 'Downloading...' : 'Download' }}
                   </button>
@@ -91,6 +103,7 @@ export class DocumentTextEditorComponent implements OnInit {
   readonly versionsLoading = signal(true);
   readonly downloadingVersion = signal<number | null>(null);
   readonly versions = signal<DocumentVersionItem[]>([]);
+  readonly retryingVersion = signal<number | null>(null);
   readonly error = signal<string | null>(null);
   readonly message = signal<string | null>(null);
 
@@ -141,7 +154,7 @@ export class DocumentTextEditorComponent implements OnInit {
   }
 
   downloadPreviousVersion(version: DocumentVersionItem): void {
-    if (this.downloadingVersion()) {
+    if (this.downloadingVersion() || version.scanStatus !== 'CLEAN') {
       return;
     }
 
@@ -160,6 +173,35 @@ export class DocumentTextEditorComponent implements OnInit {
         },
         error: (error: unknown) =>
           this.error.set(this.describeError(error, 'download the previous version')),
+      });
+  }
+
+  canRetryVersionScan(version: DocumentVersionItem): boolean {
+    return version.scanStatus === 'PENDING_SCAN'
+      || version.scanStatus === 'SCAN_FAILED'
+      || (version.scanStatus === 'SCANNING'
+        && version.lastScanAtUtc !== null
+        && Date.now() - Date.parse(version.lastScanAtUtc) > 10 * 60 * 1000);
+  }
+
+  retryPreviousVersionScan(version: DocumentVersionItem): void {
+    if (!this.item().isOwner || !this.canRetryVersionScan(version) || this.retryingVersion()) {
+      return;
+    }
+
+    this.retryingVersion.set(version.versionNumber);
+    this.documentService
+      .retryVersionScan(this.item().id, version.versionNumber)
+      .pipe(finalize(() => this.retryingVersion.set(null)))
+      .subscribe({
+        next: (result) =>
+          this.versions.update((versions) =>
+            versions.map((item) =>
+              item.versionNumber === version.versionNumber ? { ...item, ...result } : item,
+            ),
+          ),
+        error: (error: unknown) =>
+          this.error.set(this.describeError(error, 'retry the previous version scan')),
       });
   }
 

@@ -40,7 +40,11 @@ and an opaque storage key, never a client-provided path. Document listing,
 metadata, and downloads authorize the owner or a current active grantee on
 every request. `document_grants` preserves grant/revocation history and permits
 at most one active grant for a document/user pair. `document_versions` has a unique version number per
-document. `audit_events` stores request/actor/result fields and a serialized
+document. Documents and versions persist a scan status (`PendingScan`,
+`Scanning`, `Clean`, `Rejected`, or `ScanFailed`), attempt count, and last scan
+time. New data is not accessible unless its status is `Clean`; the migration
+marks all existing files pending so they cannot bypass scanning. `audit_events`
+stores request/actor/result fields and a serialized
 SHA-256 hash chain. Audit writes are serialized with a PostgreSQL transaction
 advisory lock. EF saves reject modifications/deletions and the initial migration
 adds a PostgreSQL update/delete trigger. The migrator's `--verify-audit` command
@@ -61,9 +65,17 @@ server.
   The provider is not suitable for production or multiple application replicas.
 - Uploads are limited to 10 MiB and support PDF, TXT, DOC, and DOCX. The API
   validates the extension and format-specific signature/structure before
-  storage. Malware scanning, quotas, and production private object storage
-  remain future work. The page editor and content-replacement operation remain
-  PDF-only; TXT and Word text use a separate text editor.
+  storage. Local development synchronously scans stored files through the
+  loopback-only ClamAV daemon; scanner/network errors result in `ScanFailed`.
+  Rejected, pending, and failed content remains unavailable through download
+  and editing routes. Replacement/edit candidates are scanned before activation,
+  preserving the old clean version on rejection or scanner failure. Owners can
+  retry pending and failed scans, including stale in-progress claims. The local
+  scanner and filesystem provider are not a production storage/scanning design;
+  select and review those choices before provisioning. Quotas and production
+  private object storage remain future work. The page editor and content-
+  replacement operation remain PDF-only; TXT and Word text use a separate text
+  editor.
 - TXT editing is performed by the API. DOC/DOCX conversion runs in a separate
   LibreOffice container that has no database credentials or document-storage
   mount, has no published host port, is reachable only over an internal
@@ -82,7 +94,7 @@ server.
 - In the browser editor, existing-text changes are visual cover-and-replace
   operations. Saving page edits produces image-based pages, removing text
   search/selection, links, forms, signatures, and accessibility features.
-- Upload metadata and its success audit event commit in one database
+- Upload metadata, scan result, and its audit event commit in one database
   transaction. Denied metadata/download attempts and other successful document
   operations are recorded. The local migrator can verify hashes and links for
   stored records. External anchoring and protection from a privileged database

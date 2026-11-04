@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Xml;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TrustVault.Api.Models.Documents;
@@ -21,6 +22,7 @@ namespace TrustVault.Api.Controllers;
 public sealed class DocumentsController(
     ApplicationDbContext database,
     IPrivateDocumentStorage storage,
+    IPrivateDocumentScanner scanner,
     DocumentAuditWriter auditWriter,
     ILogger<DocumentsController> logger,
     IDocumentTextConverter textConverter) : ControllerBase
@@ -241,6 +243,12 @@ public sealed class DocumentsController(
         {
             await storage.StoreAsync(document.StorageKey, input, cancellationToken);
             stored = true;
+            document.ScanAttemptCount = 1;
+            document.ScanStatus = await ScanStoredDocumentAsync(
+                document.Id,
+                document.StorageKey,
+                cancellationToken);
+            document.LastScanAtUtc = DateTime.UtcNow;
 
             await using var transaction = await database.Database.BeginTransactionAsync(
                 cancellationToken);
@@ -249,8 +257,14 @@ public sealed class DocumentsController(
                 HttpContext,
                 document.Id,
                 "document.upload",
-                AuditResult.Success,
-                JsonSerializer.Serialize(new { sizeBytes = document.SizeBytes }),
+                document.ScanStatus == DocumentScanStatus.Clean
+                    ? AuditResult.Success
+                    : AuditResult.Denied,
+                JsonSerializer.Serialize(new
+                {
+                    sizeBytes = document.SizeBytes,
+                    scanStatus = ScanStatusName(document.ScanStatus)
+                }),
                 cancellationToken);
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -356,9 +370,13 @@ public sealed class DocumentsController(
                         .Select(grant => grant.Permission)
                         .FirstOrDefault() == DocumentPermission.Read
                             ? "READ"
-                            : "EDIT"
+                            : "EDIT",
+                item.Document.ScanStatus,
+                item.Document.ScanAttemptCount,
+                item.Document.LastScanAtUtc
             })
-            .Select(item => new DocumentResponse(
+            .ToListAsync(cancellationToken);
+        var response = documents.Select(item => new DocumentResponse(
                 item.Document.Id,
                 item.Document.Title,
                 item.Document.Description,
@@ -368,8 +386,11 @@ public sealed class DocumentsController(
                 item.Document.CreatedAtUtc,
                 item.Document.UpdatedAtUtc,
                 item.IsOwner,
-                item.Permission))
-            .ToListAsync(cancellationToken);
+                item.Permission,
+                ScanStatusName(item.ScanStatus),
+                item.ScanAttemptCount,
+                item.LastScanAtUtc))
+            .ToArray();
 
         await auditWriter.WriteAsync(
             HttpContext,
@@ -385,7 +406,7 @@ public sealed class DocumentsController(
                 createdTo = createdTo
             }),
             cancellationToken);
-        return Ok(documents);
+        return Ok(response);
     }
 
     [HttpGet("{id:guid}")]
@@ -449,7 +470,11 @@ public sealed class DocumentsController(
                     || auditEvent.Action == "document.version.download"
                     || auditEvent.Action == "document.update"
                     || auditEvent.Action == "document.text.update"
-                    || auditEvent.Action == "document.content.replace"))
+                    || auditEvent.Action == "document.content.replace"
+                    || auditEvent.Action == "document.scan.retry"
+                    || auditEvent.Action == "document.scan.version.retry"
+                    || auditEvent.Action == "document.text.update.scan"
+                    || auditEvent.Action == "document.content.replace.scan"))
             .OrderByDescending(auditEvent => auditEvent.TimestampUtc)
             .ThenByDescending(auditEvent => auditEvent.Id)
             .Select(auditEvent => new
@@ -485,7 +510,12 @@ public sealed class DocumentsController(
                         or "document.text.update"
                         or "document.content.replace"
                         ? "EDITED"
-                        : "READ",
+                        : auditEvent.Action is "document.scan.retry"
+                            or "document.scan.version.retry"
+                            or "document.text.update.scan"
+                            or "document.content.replace.scan"
+                            ? "SCANNED"
+                            : "READ",
                 auditEvent.Result.ToString().ToUpperInvariant(),
                 auditEvent.TimestampUtc))
             .ToArray();
@@ -513,6 +543,10 @@ public sealed class DocumentsController(
         {
             await RecordDeniedAccessAsync(id, "document.download", cancellationToken);
             return NotFound();
+        }
+        if (document.ScanStatus != DocumentScanStatus.Clean)
+        {
+            return await ScanBlockedAsync(id, "document.download", document.ScanStatus, cancellationToken);
         }
 
         Stream content;
@@ -863,6 +897,12 @@ public sealed class DocumentsController(
             await transaction.CommitAsync(cancellationToken);
             return NotFound();
         }
+        if (document.ScanStatus != DocumentScanStatus.Clean)
+        {
+            await RecordDeniedAccessAsync(id, "document.update", cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return ScanBlocked(document.ScanStatus);
+        }
 
         var trackedDocument = await database.Documents
             .FirstAsync(item => item.Id == id && !item.IsDeleted, cancellationToken);
@@ -903,6 +943,10 @@ public sealed class DocumentsController(
         {
             await RecordDeniedAccessAsync(id, "document.text.read", cancellationToken);
             return NotFound();
+        }
+        if (document.ScanStatus != DocumentScanStatus.Clean)
+        {
+            return await ScanBlockedAsync(id, "document.text.read", document.ScanStatus, cancellationToken);
         }
 
         Stream content;
@@ -999,6 +1043,10 @@ public sealed class DocumentsController(
             await RecordDeniedAccessAsync(id, "document.text.update", cancellationToken);
             return NotFound();
         }
+        if (document.ScanStatus != DocumentScanStatus.Clean)
+        {
+            return await ScanBlockedAsync(id, "document.text.update", document.ScanStatus, cancellationToken);
+        }
 
         if (request.Text is null)
         {
@@ -1075,6 +1123,19 @@ public sealed class DocumentsController(
             await using var outputStream = new MemoryStream(outputBytes, writable: false);
             await storage.StoreAsync(newStorageKey, outputStream, cancellationToken);
             stored = true;
+            var scanStatus = await ScanStoredDocumentAsync(
+                id,
+                newStorageKey,
+                cancellationToken);
+            if (scanStatus != DocumentScanStatus.Clean)
+            {
+                await RecordScanCandidateDeniedAsync(
+                    id,
+                    "document.text.update.scan",
+                    scanStatus,
+                    cancellationToken);
+                return ScanCandidateFailure(scanStatus);
+            }
 
             await using var transaction = await database.Database.BeginTransactionAsync(
                 cancellationToken);
@@ -1119,13 +1180,19 @@ public sealed class DocumentsController(
                 ContentType = trackedDocument.ContentType,
                 SizeBytes = trackedDocument.SizeBytes,
                 UploadedByUserId = trackedDocument.OwnerId,
-                CreatedAtUtc = trackedDocument.UpdatedAtUtc
+                CreatedAtUtc = trackedDocument.UpdatedAtUtc,
+                ScanStatus = trackedDocument.ScanStatus,
+                ScanAttemptCount = trackedDocument.ScanAttemptCount,
+                LastScanAtUtc = trackedDocument.LastScanAtUtc
             });
 
             trackedDocument.StorageKey = newStorageKey;
             trackedDocument.OriginalFileName = outputFileName;
             trackedDocument.ContentType = outputContentType;
             trackedDocument.SizeBytes = outputBytes.Length;
+            trackedDocument.ScanStatus = scanStatus;
+            trackedDocument.ScanAttemptCount = 1;
+            trackedDocument.LastScanAtUtc = DateTime.UtcNow;
             trackedDocument.UpdatedAtUtc = DateTime.UtcNow;
             await auditWriter.WriteAsync(
                 HttpContext,
@@ -1136,7 +1203,8 @@ public sealed class DocumentsController(
                 {
                     sourceExtension,
                     outputExtension = Path.GetExtension(outputFileName),
-                    sizeBytes = outputBytes.Length
+                    sizeBytes = outputBytes.Length,
+                    scanStatus = ScanStatusName(scanStatus)
                 }),
                 cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -1179,6 +1247,10 @@ public sealed class DocumentsController(
         {
             await RecordDeniedAccessAsync(id, "document.content.replace", cancellationToken);
             return NotFound();
+        }
+        if (document.ScanStatus != DocumentScanStatus.Clean)
+        {
+            return await ScanBlockedAsync(id, "document.content.replace", document.ScanStatus, cancellationToken);
         }
 
         if (file is null || file.Length is <= 0 or > MaximumFileBytes)
@@ -1231,6 +1303,19 @@ public sealed class DocumentsController(
         {
             await storage.StoreAsync(newStorageKey, input, cancellationToken);
             stored = true;
+            var scanStatus = await ScanStoredDocumentAsync(
+                id,
+                newStorageKey,
+                cancellationToken);
+            if (scanStatus != DocumentScanStatus.Clean)
+            {
+                await RecordScanCandidateDeniedAsync(
+                    id,
+                    "document.content.replace.scan",
+                    scanStatus,
+                    cancellationToken);
+                return ScanCandidateFailure(scanStatus);
+            }
 
             await using var transaction = await database.Database.BeginTransactionAsync(
                 cancellationToken);
@@ -1276,7 +1361,10 @@ public sealed class DocumentsController(
                     ContentType = trackedDocument.ContentType,
                     SizeBytes = trackedDocument.SizeBytes,
                     UploadedByUserId = trackedDocument.OwnerId,
-                    CreatedAtUtc = trackedDocument.UpdatedAtUtc
+                    CreatedAtUtc = trackedDocument.UpdatedAtUtc,
+                    ScanStatus = trackedDocument.ScanStatus,
+                    ScanAttemptCount = trackedDocument.ScanAttemptCount,
+                    LastScanAtUtc = trackedDocument.LastScanAtUtc
                 });
             }
 
@@ -1284,6 +1372,9 @@ public sealed class DocumentsController(
             trackedDocument.OriginalFileName = originalFileName;
             trackedDocument.ContentType = "application/pdf";
             trackedDocument.SizeBytes = file.Length;
+            trackedDocument.ScanStatus = scanStatus;
+            trackedDocument.ScanAttemptCount = 1;
+            trackedDocument.LastScanAtUtc = DateTime.UtcNow;
             trackedDocument.UpdatedAtUtc = DateTime.UtcNow;
             await auditWriter.WriteAsync(
                 HttpContext,
@@ -1293,6 +1384,7 @@ public sealed class DocumentsController(
                 JsonSerializer.Serialize(new
                 {
                     sizeBytes = file.Length,
+                    scanStatus = ScanStatusName(scanStatus),
                     previousVersion = purgePreviousVersions ? (int?)null : previousVersion + 1,
                     purgedPreviousVersions = purgePreviousVersions
                 }),
@@ -1358,12 +1450,25 @@ public sealed class DocumentsController(
             .AsNoTracking()
             .Where(version => version.DocumentId == id)
             .OrderByDescending(version => version.VersionNumber)
-            .Select(version => new DocumentVersionResponse(
+            .Select(version => new
+            {
                 version.VersionNumber,
                 version.OriginalFileName,
                 version.SizeBytes,
-                version.CreatedAtUtc))
+                version.CreatedAtUtc,
+                version.ScanStatus,
+                version.ScanAttemptCount,
+                version.LastScanAtUtc
+            })
             .ToListAsync(cancellationToken);
+        var response = versions.Select(version => new DocumentVersionResponse(
+            version.VersionNumber,
+            version.OriginalFileName,
+            version.SizeBytes,
+            version.CreatedAtUtc,
+            ScanStatusName(version.ScanStatus),
+            version.ScanAttemptCount,
+            version.LastScanAtUtc)).ToArray();
         await auditWriter.WriteAsync(
             HttpContext,
             id,
@@ -1371,7 +1476,228 @@ public sealed class DocumentsController(
             AuditResult.Success,
             "{}",
             cancellationToken);
-        return Ok(versions);
+        return Ok(response);
+    }
+
+    [HttpPost("{id:guid}/scan/retry")]
+    [ProducesResponseType<DocumentScanStatusResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<DocumentScanStatusResponse>> RetryDocumentScan(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var document = await database.Documents
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                item => item.Id == id && item.OwnerId == ownerId && !item.IsDeleted,
+                cancellationToken);
+        if (document is null)
+        {
+            return NotFound();
+        }
+
+        var canRetry = document.ScanStatus is DocumentScanStatus.PendingScan
+            or DocumentScanStatus.ScanFailed
+            || (document.ScanStatus == DocumentScanStatus.Scanning
+                && document.LastScanAtUtc < DateTime.UtcNow.AddMinutes(-10));
+        if (!canRetry)
+        {
+            return ScanRetryConflict(document.ScanStatus);
+        }
+
+        var claimedAt = DateTime.UtcNow;
+        var claim = database.Documents
+            .Where(item => item.Id == id
+                && item.OwnerId == ownerId
+                && !item.IsDeleted
+                && item.ScanStatus == document.ScanStatus);
+        if (document.ScanStatus == DocumentScanStatus.Scanning)
+        {
+            var staleBefore = claimedAt.AddMinutes(-10);
+            claim = claim.Where(item => item.LastScanAtUtc < staleBefore);
+        }
+
+        var claimed = await claim.ExecuteUpdateAsync(
+            setters => setters
+                .SetProperty(item => item.ScanStatus, DocumentScanStatus.Scanning)
+                .SetProperty(item => item.ScanAttemptCount, item => item.ScanAttemptCount + 1)
+                .SetProperty(item => item.LastScanAtUtc, claimedAt),
+            cancellationToken);
+        if (claimed == 0)
+        {
+            return ScanRetryConflict(document.ScanStatus);
+        }
+
+        DocumentScanStatus scanStatus;
+        try
+        {
+            scanStatus = await ScanStoredDocumentAsync(
+                id,
+                document.StorageKey,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await database.Documents
+                .Where(item => item.Id == id
+                    && !item.IsDeleted
+                    && item.ScanStatus == DocumentScanStatus.Scanning)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(item => item.ScanStatus, DocumentScanStatus.ScanFailed)
+                        .SetProperty(item => item.LastScanAtUtc, DateTime.UtcNow),
+                    CancellationToken.None);
+            throw;
+        }
+
+        var completedAt = DateTime.UtcNow;
+        var completed = await database.Documents
+            .Where(item => item.Id == id
+                && !item.IsDeleted
+                && item.ScanStatus == DocumentScanStatus.Scanning)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(item => item.ScanStatus, scanStatus)
+                    .SetProperty(item => item.LastScanAtUtc, completedAt),
+                cancellationToken);
+        if (completed == 0)
+        {
+            return NotFound();
+        }
+        await auditWriter.WriteAsync(
+            HttpContext,
+            id,
+            "document.scan.retry",
+            scanStatus == DocumentScanStatus.Clean ? AuditResult.Success : AuditResult.Denied,
+            JsonSerializer.Serialize(new
+            {
+                scanStatus = ScanStatusName(scanStatus),
+                scanAttemptCount = document.ScanAttemptCount + 1
+            }),
+            cancellationToken);
+
+        return Ok(new DocumentScanStatusResponse(
+            ScanStatusName(scanStatus),
+            document.ScanAttemptCount + 1,
+            completedAt));
+    }
+
+    [HttpPost("{id:guid}/versions/{versionNumber:int}/scan/retry")]
+    [ProducesResponseType<DocumentScanStatusResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<DocumentScanStatusResponse>> RetryVersionScan(
+        Guid id,
+        int versionNumber,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetUserId(out var ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var document = await database.Documents
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                item => item.Id == id && item.OwnerId == ownerId && !item.IsDeleted,
+                cancellationToken);
+        var version = await database.DocumentVersions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                item => item.DocumentId == id && item.VersionNumber == versionNumber,
+                cancellationToken);
+        if (document is null || version is null)
+        {
+            return NotFound();
+        }
+
+        var canRetry = version.ScanStatus is DocumentScanStatus.PendingScan
+            or DocumentScanStatus.ScanFailed
+            || (version.ScanStatus == DocumentScanStatus.Scanning
+                && version.LastScanAtUtc < DateTime.UtcNow.AddMinutes(-10));
+        if (!canRetry)
+        {
+            return ScanRetryConflict(version.ScanStatus);
+        }
+
+        var claimedAt = DateTime.UtcNow;
+        var claim = database.DocumentVersions
+            .Where(item => item.Id == version.Id
+                && item.ScanStatus == version.ScanStatus);
+        if (version.ScanStatus == DocumentScanStatus.Scanning)
+        {
+            var staleBefore = claimedAt.AddMinutes(-10);
+            claim = claim.Where(item => item.LastScanAtUtc < staleBefore);
+        }
+
+        var claimed = await claim.ExecuteUpdateAsync(
+            setters => setters
+                .SetProperty(item => item.ScanStatus, DocumentScanStatus.Scanning)
+                .SetProperty(item => item.ScanAttemptCount, item => item.ScanAttemptCount + 1)
+                .SetProperty(item => item.LastScanAtUtc, claimedAt),
+            cancellationToken);
+        if (claimed == 0)
+        {
+            return ScanRetryConflict(version.ScanStatus);
+        }
+
+        DocumentScanStatus scanStatus;
+        try
+        {
+            scanStatus = await ScanStoredDocumentAsync(
+                id,
+                version.StorageKey,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await database.DocumentVersions
+                .Where(item => item.Id == version.Id
+                    && item.ScanStatus == DocumentScanStatus.Scanning)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(item => item.ScanStatus, DocumentScanStatus.ScanFailed)
+                        .SetProperty(item => item.LastScanAtUtc, DateTime.UtcNow),
+                    CancellationToken.None);
+            throw;
+        }
+
+        var completedAt = DateTime.UtcNow;
+        var completed = await database.DocumentVersions
+            .Where(item => item.Id == version.Id
+                && item.ScanStatus == DocumentScanStatus.Scanning)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(item => item.ScanStatus, scanStatus)
+                    .SetProperty(item => item.LastScanAtUtc, completedAt),
+                cancellationToken);
+        if (completed == 0)
+        {
+            return NotFound();
+        }
+        await auditWriter.WriteAsync(
+            HttpContext,
+            id,
+            "document.scan.version.retry",
+            scanStatus == DocumentScanStatus.Clean ? AuditResult.Success : AuditResult.Denied,
+            JsonSerializer.Serialize(new
+            {
+                versionNumber,
+                scanStatus = ScanStatusName(scanStatus),
+                scanAttemptCount = version.ScanAttemptCount + 1
+            }),
+            cancellationToken);
+
+        return Ok(new DocumentScanStatusResponse(
+            ScanStatusName(scanStatus),
+            version.ScanAttemptCount + 1,
+            completedAt));
     }
 
     [HttpGet("{id:guid}/versions/{versionNumber:int}/content")]
@@ -1399,6 +1725,14 @@ public sealed class DocumentsController(
         if (version is null)
         {
             return NotFound();
+        }
+        if (version.ScanStatus != DocumentScanStatus.Clean)
+        {
+            return await ScanBlockedAsync(
+                id,
+                "document.version.download",
+                version.ScanStatus,
+                cancellationToken);
         }
 
         Stream content;
@@ -1492,6 +1826,97 @@ public sealed class DocumentsController(
             cancellationToken);
     }
 
+    private Task RecordScanCandidateDeniedAsync(
+        Guid documentId,
+        string action,
+        DocumentScanStatus scanStatus,
+        CancellationToken cancellationToken) =>
+        auditWriter.WriteAsync(
+            HttpContext,
+            documentId,
+            action,
+            AuditResult.Denied,
+            JsonSerializer.Serialize(new { scanStatus = ScanStatusName(scanStatus) }),
+            cancellationToken);
+
+    private async Task<DocumentScanStatus> ScanStoredDocumentAsync(
+        Guid documentId,
+        string storageKey,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var content = await storage.OpenReadAsync(storageKey, cancellationToken);
+            return await scanner.ScanAsync(content, cancellationToken) switch
+            {
+                DocumentScanVerdict.Clean => DocumentScanStatus.Clean,
+                DocumentScanVerdict.Rejected => DocumentScanStatus.Rejected,
+                _ => throw new InvalidOperationException("The scanner returned an unknown verdict.")
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is IOException or SocketException or UnauthorizedAccessException)
+        {
+            logger.LogError(exception, "Malware scan failed for document {DocumentId}.", documentId);
+            return DocumentScanStatus.ScanFailed;
+        }
+    }
+
+    private async Task<ObjectResult> ScanBlockedAsync(
+        Guid documentId,
+        string action,
+        DocumentScanStatus scanStatus,
+        CancellationToken cancellationToken)
+    {
+        await RecordDeniedAccessAsync(documentId, action, cancellationToken);
+        return ScanBlocked(scanStatus);
+    }
+
+    private static ObjectResult ScanBlocked(DocumentScanStatus scanStatus)
+    {
+        var details = new ProblemDetails
+        {
+            Status = StatusCodes.Status409Conflict,
+            Title = "Document content is unavailable until a malware scan completes successfully.",
+            Detail = $"Current scan status: {ScanStatusName(scanStatus)}."
+        };
+        return new ObjectResult(details) { StatusCode = StatusCodes.Status409Conflict };
+    }
+
+    private static ObjectResult ScanRetryConflict(DocumentScanStatus scanStatus) =>
+        new(new ProblemDetails
+        {
+            Status = StatusCodes.Status409Conflict,
+            Title = "This document cannot be retried in its current scan state.",
+            Detail = $"Current scan status: {ScanStatusName(scanStatus)}."
+        })
+        {
+            StatusCode = StatusCodes.Status409Conflict
+        };
+
+    private static ObjectResult ScanCandidateFailure(DocumentScanStatus scanStatus) =>
+        scanStatus == DocumentScanStatus.Rejected
+            ? new ObjectResult(new ProblemDetails
+            {
+                Status = StatusCodes.Status422UnprocessableEntity,
+                Title = "The uploaded content was rejected by the malware scanner."
+            })
+            {
+                StatusCode = StatusCodes.Status422UnprocessableEntity
+            }
+            : new ObjectResult(new ProblemDetails
+            {
+                Status = StatusCodes.Status503ServiceUnavailable,
+                Title = "The malware scanner is unavailable. The content was not saved."
+            })
+            {
+                StatusCode = StatusCodes.Status503ServiceUnavailable
+            };
+
     private bool TryGetUserId(out Guid userId) =>
         Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out userId);
 
@@ -1499,6 +1924,17 @@ public sealed class DocumentsController(
         extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)
         || extension.Equals(".doc", StringComparison.OrdinalIgnoreCase)
         || extension.Equals(".docx", StringComparison.OrdinalIgnoreCase);
+
+    private static string ScanStatusName(DocumentScanStatus status) =>
+        status switch
+        {
+            DocumentScanStatus.PendingScan => "PENDING_SCAN",
+            DocumentScanStatus.Scanning => "SCANNING",
+            DocumentScanStatus.Clean => "CLEAN",
+            DocumentScanStatus.Rejected => "REJECTED",
+            DocumentScanStatus.ScanFailed => "SCAN_FAILED",
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
+        };
 
     private static DocumentResponse ToResponse(
         Document document,
@@ -1514,5 +1950,8 @@ public sealed class DocumentsController(
             document.CreatedAtUtc,
             document.UpdatedAtUtc,
             isOwner,
-            permission?.ToString().ToUpperInvariant());
+            permission?.ToString().ToUpperInvariant(),
+            ScanStatusName(document.ScanStatus),
+            document.ScanAttemptCount,
+            document.LastScanAtUtc);
 }

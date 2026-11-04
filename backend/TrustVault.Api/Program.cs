@@ -48,11 +48,27 @@ builder.Services.AddHttpClient<IDocumentTextConverter, DocumentTextConverterClie
     client => client.Timeout = TimeSpan.FromSeconds(45));
 var documentStorageRoot = builder.Configuration["Storage:RootPath"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data", "documents");
+var scannerHost = builder.Configuration["MalwareScanning:ClamAv:Host"] ?? "127.0.0.1";
+var scannerPort = builder.Configuration.GetValue("MalwareScanning:ClamAv:Port", 3310);
+var scannerTimeoutSeconds = builder.Configuration.GetValue(
+    "MalwareScanning:ClamAv:TimeoutSeconds",
+    45);
+if (string.IsNullOrWhiteSpace(scannerHost)
+    || scannerPort is < 1 or > 65535
+    || scannerTimeoutSeconds is < 1 or > 300)
+{
+    throw new InvalidOperationException("The ClamAV scanning configuration is invalid.");
+}
 var authenticationRateLimit = builder.Configuration.GetValue(
     "RateLimits:AuthenticationPermitLimit",
     10);
 builder.Services.AddSingleton<IPrivateDocumentStorage>(
     new FileSystemPrivateDocumentStorage(documentStorageRoot));
+builder.Services.AddSingleton<IPrivateDocumentScanner>(
+    new ClamAvPrivateDocumentScanner(
+        scannerHost,
+        scannerPort,
+        TimeSpan.FromSeconds(scannerTimeoutSeconds)));
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
