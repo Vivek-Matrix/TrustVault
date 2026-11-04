@@ -10,10 +10,11 @@ namespace TrustVault.Api.Controllers;
 [ApiController]
 [Route("api/auth")]
 [EnableRateLimiting("authentication")]
-[AllowAnonymous]
+[Authorize]
 public sealed class AuthController(IAuthenticationService authenticationService) : ControllerBase
 {
     /// <summary>Creates a Viewer account and returns its initial access token.</summary>
+    [AllowAnonymous]
     [HttpPost("register")]
     [ProducesResponseType<AuthResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -45,6 +46,7 @@ public sealed class AuthController(IAuthenticationService authenticationService)
     }
 
     /// <summary>Authenticates an account and returns a short-lived access token.</summary>
+    [AllowAnonymous]
     [HttpPost("login")]
     [ProducesResponseType<AuthResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
@@ -65,6 +67,7 @@ public sealed class AuthController(IAuthenticationService authenticationService)
         return Ok(response);
     }
 
+    [AllowAnonymous]
     [HttpPost("refresh")]
     [ProducesResponseType<AuthResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
