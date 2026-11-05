@@ -238,3 +238,25 @@ written; the repository now has an `origin` remote.
   database was not changed; tests used a separately created temporary database.
 - **Commit:** Pending; record the commit reference after the changes are
   committed.
+
+## 2026-11-05 — Administrator oversight console
+
+- **Asked:** Implement the Administrator-focused workflows from the supplied
+  use-case details while preserving per-document ownership and preventing
+  automatic Administrator access to document contents.
+- **Produced:** Added admin-only dashboard, audit investigation/export/chain
+  verification, heuristic alerts, metadata and permission review, named-share
+  search/revocation, ownership reassignment, credential reset, and read-only
+  operational settings, with a matching Angular console and authorization/
+  metadata-boundary integration tests.
+- **What needed correction:** An early integration test run used the fixture's
+  default local database credentials instead of an isolated test database.
+  The new administrator endpoints also needed paginated response wrappers to
+  match the client contract; the test deserialization was updated accordingly.
+- **What I did instead:** Ran the 12 administrator integration tests against
+  the isolated `trustvault_admin_tests` database. All 12 passed. The full
+  backend suite passed 76 tests but exposed two database-role tests expecting
+  PostgreSQL permission error `42501` while the existing audit mutation trigger
+  returns `P0001`; neither test exercises the new feature. The solution build,
+  frontend lint, all 26 frontend tests, and production frontend build pass.
+  These changes remain uncommitted; add the actual commit link after commit.

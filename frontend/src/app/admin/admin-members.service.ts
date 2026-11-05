@@ -19,6 +19,13 @@ export interface CreatedMember {
   passwordChangeRequired: boolean;
 }
 
+export interface TemporaryCredentials {
+  userId: string;
+  email: string;
+  temporaryPassword: string;
+  passwordChangeRequired: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class AdminMembersService {
   private readonly http = inject(HttpClient);
@@ -34,5 +41,12 @@ export class AdminMembersService {
 
   remove(userId: string): Observable<void> {
     return this.http.delete<void>(`${this.membersUrl}/${userId}`);
+  }
+
+  resetCredentials(userId: string, reason: string): Observable<TemporaryCredentials> {
+    return this.http.post<TemporaryCredentials>(
+      `${this.membersUrl}/${encodeURIComponent(userId)}/reset-credentials`,
+      { reason },
+    );
   }
 }

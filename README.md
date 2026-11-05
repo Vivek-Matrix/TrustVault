@@ -43,6 +43,25 @@ deployment steps. Do not upload real confidential files: although server-side
 sharing and revocation are implemented locally, production-grade storage and
 audit integrity controls are not.
 
+## Administrator oversight
+
+The Administrator can view platform counts, investigate and export filtered
+audit metadata, verify the stored audit chain, review rule-based security
+alerts, search document metadata and permission history, revoke a named-user
+grant with a reason, reassign a document to an active member, reset member
+credentials, and inspect read-only policy settings. These controls do not
+provide document content access; the Administrator still needs a document
+grant to read or download content. Ownership reassignment revokes all current
+grants. Named-user shares do not support guest links or expiry.
+
+Alert rules currently flag five audited denials from one actor/IP in ten
+minutes or twenty successful downloads from one actor/IP in an hour. They do
+not send notifications and do not capture anonymous authorization failures.
+Settings are view-only; infrastructure, scanner, password, session, and upload
+policy changes require reviewed deployment configuration. MFA,
+self-service password recovery, retention/recovery, deletion approval,
+quarantine, and independent audit anchoring remain unfinished.
+
 See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
 [docs/backlog.md](docs/backlog.md), and [THREATS.md](THREATS.md).
 

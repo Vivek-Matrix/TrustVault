@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -49,6 +48,7 @@ public sealed class AdminMembersController(
     }
 
     [HttpPost]
+    [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
     [ProducesResponseType<MemberCreatedResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -72,7 +72,7 @@ public sealed class AdminMembersController(
             throw new InvalidOperationException("The configured Viewer role does not exist.");
         }
 
-        var temporaryPassword = GenerateTemporaryPassword();
+        var temporaryPassword = TemporaryPasswordGenerator.Generate();
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
         var member = existingMember ?? new ApplicationUser
         {
@@ -216,34 +216,6 @@ public sealed class AdminMembersController(
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return NoContent();
-    }
-
-    private static string GenerateTemporaryPassword()
-    {
-        const string upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-        const string lower = "abcdefghijkmnopqrstuvwxyz";
-        const string digits = "23456789";
-        const string symbols = "!@$%*-_";
-        var alphabet = upper + lower + digits + symbols;
-        var password = new char[32];
-        password[0] = Pick(upper);
-        password[1] = Pick(lower);
-        password[2] = Pick(digits);
-        password[3] = Pick(symbols);
-        for (var index = 4; index < password.Length; index++)
-        {
-            password[index] = Pick(alphabet);
-        }
-
-        for (var index = password.Length - 1; index > 0; index--)
-        {
-            var swapIndex = RandomNumberGenerator.GetInt32(index + 1);
-            (password[index], password[swapIndex]) = (password[swapIndex], password[index]);
-        }
-
-        return new string(password);
-
-        static char Pick(string source) => source[RandomNumberGenerator.GetInt32(source.Length)];
     }
 
     private static ValidationProblemDetails ToValidationProblem(

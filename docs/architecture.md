@@ -45,6 +45,18 @@ sole primary administrator. Account create/deactivate operations are appended
 to the existing hash chain; this does not protect against a privileged database
 operator rewriting the chain.
 
+Administrator oversight APIs are separately role-protected. They expose
+platform aggregates, audit metadata, active/revoked grants, and document
+metadata, but do not grant content access. Admin credential resets rotate the
+security stamp and invalidate existing tokens. Admin permission revocation
+requires a reason and is checked live by the existing document authorization
+path. Ownership reassignment requires an active non-administrator member and
+revokes every active grant in the same transaction. The first alert rules are
+fixed heuristics over recorded events (5 denials per actor/IP in 10 minutes;
+20 successful downloads per actor/IP in one hour), not configurable monitoring.
+The admin settings view is read-only because security/infrastructure values
+must be changed through reviewed deployment configuration.
+
 ## Data model
 
 Identity tables are created by ASP.NET Core Identity. `documents` stores metadata

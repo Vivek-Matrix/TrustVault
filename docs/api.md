@@ -12,6 +12,18 @@ anonymous. The browser's route guards are not an authorization boundary.
 | GET | `/api/admin/members` | Sole Administrator | List member accounts and roles |
 | POST | `/api/admin/members` | Sole Administrator | Create or reactivate a Viewer account and return its one-time temporary password; document ownership is established by uploading a document |
 | DELETE | `/api/admin/members/{userId}` | Sole Administrator | Deactivate a member, revoke tokens and grants, preserve documents and audit history |
+| POST | `/api/admin/members/{userId}/reset-credentials` | Sole Administrator | Reset a member password, require a change at next sign-in, revoke current tokens, and return a one-time temporary password; a reason is required |
+| GET | `/api/admin/dashboard` | Sole Administrator | Return platform counts without document content |
+| GET | `/api/admin/audit` | Sole Administrator | Search audit events by user, document, action, date range, IP, and outcome; maximum page size is 100 |
+| GET | `/api/admin/audit/export` | Sole Administrator | Export filtered audit metadata as CSV; exports are capped at 5,000 events |
+| GET | `/api/admin/audit/verify` | Sole Administrator | Verify hashes and links in the currently stored audit chain |
+| GET | `/api/admin/security-alerts` | Sole Administrator | Return rule-based alerts for repeated audited denials and high download volume |
+| GET | `/api/admin/documents` | Sole Administrator | Search document metadata only; never returns bytes, storage keys, or download URLs |
+| GET | `/api/admin/documents/{id}/permissions` | Sole Administrator | Review active and revoked named-user grants |
+| DELETE | `/api/admin/documents/{id}/permissions/{userId}` | Sole Administrator | Revoke an active grant immediately; a reason is required and recorded |
+| POST | `/api/admin/documents/{id}/reassign-owner` | Sole Administrator | Reassign a document to an active non-administrator member; revokes all existing grants and records a reason |
+| GET | `/api/admin/shares` | Sole Administrator | Search active named-user shares; anonymous guest links are not supported |
+| GET | `/api/admin/settings` | Sole Administrator | View currently enforced policy values; settings are read-only and secrets are never returned |
 | POST | `/api/documents` | Authenticated owner | Upload a supported file; ownership is taken from the signed-in identity |
 | POST | `/api/documents/{id}/scan/retry` | Document owner | Retry a pending or failed scan |
 | GET | `/api/documents` | Owner or active grantee | List non-deleted documents owned by or shared with the caller |
@@ -48,6 +60,38 @@ out-of-band. Passwords are validated and hashed by
 ASP.NET Core Identity. Document ownership belongs to an individual document
 and is assigned to its uploader; owners grant or revoke per-document `READ` or
 `EDIT` access.
+
+## Administrator oversight
+
+The Administrator is a platform guardian, not a document superuser. Admin
+routes return counts, metadata, permission history, and audit fields only; they
+never return file bytes, storage keys, or download URLs. The Administrator
+cannot use a document endpoint unless independently granted access, and
+document reassignment only permits an active non-administrator member as the
+new owner. Reassignment revokes all current grants and records the reason.
+
+Audit searches support actor user ID or email, document ID, action substring,
+UTC date range, IP substring, outcome, and pagination (1–100 rows). CSV export
+uses the same filters and refuses exports above 5,000 rows. Export fields omit
+event metadata JSON and file content. Audit verification checks the chain
+currently stored in PostgreSQL; it does not detect tail deletion or a complete
+rewrite without independent external anchoring.
+
+Security alerts are initial heuristics, not an intrusion-detection guarantee:
+five or more audited denied events for the same actor/IP in ten minutes produce
+a HIGH alert, and twenty or more successful downloads for the same actor/IP in
+one hour produce a MEDIUM alert. Anonymous failures that are rejected before a
+document controller runs are not included. Alerts do not yet send notifications
+or perform device fingerprinting.
+
+Sharing is limited to named accounts already registered in TrustVault; there
+are no anonymous guest links or expiry controls. The admin settings endpoint
+is read-only and displays enforced values without secrets. Changes to upload,
+scanner, storage, session, password, and MFA policy remain deployment-time
+configuration; MFA is not implemented. Self-service password recovery,
+retention schedules, soft-delete recovery, deletion approval, document
+quarantine, and independent audit anchoring are not provided by this release.
+
 Login returns the same `401` response for an unknown email, invalid password,
 locked-out account, or suspended account. Repeated failed passwords trigger
 Identity lockout. Login issues an access token and a refresh token; refresh
@@ -156,8 +200,10 @@ verifies the records currently present: it cannot detect deletion of the tail
 or a complete rewrite of the chain without a separately protected external
 anchor. The command does not apply database migrations.
 
-Email verification, password reset, administrator user management, and
-immediate revocation of already-issued access tokens are not implemented.
+Email verification and self-service password recovery are not implemented.
+Administrator-managed user creation/deactivation, administrator credential
+reset, and immediate revocation of already-issued access tokens are
+implemented.
 `whoami` reads identity claims only and does not imply authorization to any
 document. The in-memory IP limiter requires trusted forwarded-header
 configuration when deployed behind a proxy; do not treat it as a substitute for

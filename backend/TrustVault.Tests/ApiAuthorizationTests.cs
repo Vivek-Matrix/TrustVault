@@ -519,6 +519,292 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Administrator_oversight_endpoints_are_forbidden_to_viewers()
+    {
+        var viewer = await RegisterAndGetSessionAsync();
+        using var dashboardRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/dashboard",
+            viewer);
+        using var auditRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/audit",
+            viewer);
+        using var documentsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/documents",
+            viewer);
+        using var dashboard = await _client.SendAsync(dashboardRequest);
+        using var audit = await _client.SendAsync(auditRequest);
+        using var documents = await _client.SendAsync(documentsRequest);
+
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, dashboard.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, audit.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, documents.StatusCode);
+    }
+
+    [Fact]
+    public async Task Administrator_pagination_rejects_offsets_that_overflow()
+    {
+        var administrator = await GetAdministratorSessionAsync();
+        using var auditRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/audit?page=2147483647&pageSize=100",
+            administrator);
+        using var documentsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/documents?page=2147483647&pageSize=100",
+            administrator);
+        using var sharesRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/shares?page=2147483647&pageSize=100",
+            administrator);
+        using var audit = await _client.SendAsync(auditRequest);
+        using var documents = await _client.SendAsync(documentsRequest);
+        using var shares = await _client.SendAsync(sharesRequest);
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, audit.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, documents.StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, shares.StatusCode);
+    }
+
+    [Fact]
+    public async Task Administrator_can_search_export_and_verify_audit_events()
+    {
+        var member = await CreateMemberAndSetPasswordAsync(NewEmail());
+        using var upload = await UploadPdfAsync(member);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+        var administrator = await GetAdministratorSessionAsync();
+
+        using var searchRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/admin/audit?user={Uri.EscapeDataString(member.Email)}"
+                + $"&documentId={document.Id}&action=document.upload&outcome=DENIED",
+            administrator);
+        using var searchResponse = await _client.SendAsync(searchRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, searchResponse.StatusCode);
+        var search = await searchResponse.Content.ReadFromJsonAsync<AdminAuditPageResponse>();
+        Assert.NotNull(search);
+        Assert.Equal(0, search.TotalCount);
+
+        using var exportRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/admin/audit/export?user={Uri.EscapeDataString(member.Email)}"
+                + $"&documentId={document.Id}&action=document.upload",
+            administrator);
+        using var export = await _client.SendAsync(exportRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, export.StatusCode);
+        Assert.Contains("actor_email", await export.Content.ReadAsStringAsync());
+        Assert.Contains(member.Email, await export.Content.ReadAsStringAsync());
+
+        using var verifyRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/audit/verify",
+            administrator);
+        using var verify = await _client.SendAsync(verifyRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, verify.StatusCode);
+    }
+
+    [Fact]
+    public async Task Administrator_can_review_metadata_and_revoke_permission_without_content_access()
+    {
+        var owner = await CreateMemberAndSetPasswordAsync(NewEmail());
+        var recipient = await CreateMemberAndSetPasswordAsync(NewEmail());
+        using var upload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var grantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            owner,
+            JsonContent.Create(new { email = recipient.Email, permission = "READ" }));
+        using var grant = await _client.SendAsync(grantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, grant.StatusCode);
+
+        var administrator = await GetAdministratorSessionAsync();
+        using var metadataRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/admin/documents?search={Uri.EscapeDataString(document.Title)}",
+            administrator);
+        using var metadataResponse = await _client.SendAsync(metadataRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, metadataResponse.StatusCode);
+        var metadataJson = await metadataResponse.Content.ReadAsStringAsync();
+        Assert.Contains(document.Id.ToString(), metadataJson);
+        Assert.DoesNotContain("storageKey", metadataJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("contentBytes", metadataJson, StringComparison.OrdinalIgnoreCase);
+
+        using var permissionsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/admin/documents/{document.Id}/permissions",
+            administrator);
+        using var permissionsResponse = await _client.SendAsync(permissionsRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, permissionsResponse.StatusCode);
+        var permissions = await permissionsResponse.Content
+            .ReadFromJsonAsync<AdminPermissionResponse[]>();
+        Assert.NotNull(permissions);
+        Assert.Contains(permissions, item => item.Email == recipient.Email);
+
+        using var revokeRequest = CreateAuthorizedRequest(
+            HttpMethod.Delete,
+            $"/api/admin/documents/{document.Id}/permissions/{recipient.UserId}",
+            administrator,
+            JsonContent.Create(new { reason = "Incident response review" }));
+        using var revoked = await _client.SendAsync(revokeRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, revoked.StatusCode);
+
+        using var recipientDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            recipient);
+        using var recipientDownload = await _client.SendAsync(recipientDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, recipientDownload.StatusCode);
+
+        using var administratorDownloadRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            administrator);
+        using var administratorDownload = await _client.SendAsync(administratorDownloadRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, administratorDownload.StatusCode);
+    }
+
+    [Fact]
+    public async Task Administrator_can_review_named_shares_and_reassign_an_orphaned_document()
+    {
+        var oldOwner = await CreateMemberAndSetPasswordAsync(NewEmail());
+        var newOwner = await CreateMemberAndSetPasswordAsync(NewEmail());
+        var reader = await CreateMemberAndSetPasswordAsync(NewEmail());
+        using var upload = await UploadPdfAsync(oldOwner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, upload.StatusCode);
+        var document = await upload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(document);
+
+        using var grantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{document.Id}/grants",
+            oldOwner,
+            JsonContent.Create(new { email = reader.Email, permission = "READ" }));
+        using var grant = await _client.SendAsync(grantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, grant.StatusCode);
+
+        var administrator = await GetAdministratorSessionAsync();
+        using var sharesRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/admin/shares?search={Uri.EscapeDataString(reader.Email)}",
+            administrator);
+        using var sharesResponse = await _client.SendAsync(sharesRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, sharesResponse.StatusCode);
+        var shares = await sharesResponse.Content.ReadFromJsonAsync<AdminSharePageResponse>();
+        Assert.NotNull(shares);
+        Assert.Contains(shares.Items, item =>
+            item.DocumentId == document.Id && item.UserEmail == reader.Email);
+
+        using var reassignRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/admin/documents/{document.Id}/reassign-owner",
+            administrator,
+            JsonContent.Create(new
+            {
+                newOwnerId = newOwner.UserId,
+                reason = "Original owner account was removed"
+            }));
+        using var reassign = await _client.SendAsync(reassignRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, reassign.StatusCode);
+
+        using var oldOwnerRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            oldOwner);
+        using var oldOwnerDownload = await _client.SendAsync(oldOwnerRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, oldOwnerDownload.StatusCode);
+
+        using var newOwnerRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            newOwner);
+        using var newOwnerDownload = await _client.SendAsync(newOwnerRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, newOwnerDownload.StatusCode);
+        Assert.Equal(PdfBytes, await newOwnerDownload.Content.ReadAsByteArrayAsync());
+
+        using var readerRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{document.Id}/content",
+            reader);
+        using var readerDownload = await _client.SendAsync(readerRequest);
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, readerDownload.StatusCode);
+    }
+
+    [Fact]
+    public async Task Administrator_dashboard_alert_and_settings_endpoints_return_non_content_data()
+    {
+        var administrator = await GetAdministratorSessionAsync();
+        using var dashboardRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/dashboard",
+            administrator);
+        using var dashboard = await _client.SendAsync(dashboardRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, dashboard.StatusCode);
+        var dashboardJson = await dashboard.Content.ReadAsStringAsync();
+        Assert.Contains("activeDocuments", dashboardJson);
+        Assert.DoesNotContain("storageKey", dashboardJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("contentBytes", dashboardJson, StringComparison.OrdinalIgnoreCase);
+
+        using var alertsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/security-alerts",
+            administrator);
+        using var alerts = await _client.SendAsync(alertsRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, alerts.StatusCode);
+
+        using var settingsRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/admin/settings",
+            administrator);
+        using var settings = await _client.SendAsync(settingsRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, settings.StatusCode);
+        var settingsJson = await settings.Content.ReadAsStringAsync();
+        Assert.Contains("externalGuestLinksEnabled", settingsJson);
+        Assert.DoesNotContain("PasswordHash", settingsJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("storagePath", settingsJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Administrator_credential_reset_invalidates_old_tokens_and_requires_password_change()
+    {
+        var email = NewEmail();
+        var member = await CreateMemberAndSetPasswordAsync(email);
+        var administrator = await GetAdministratorSessionAsync();
+
+        using var resetRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/admin/members/{member.UserId}/reset-credentials",
+            administrator,
+            JsonContent.Create(new { reason = "Member reported compromised password" }));
+        using var resetResponse = await _client.SendAsync(resetRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, resetResponse.StatusCode);
+        var reset = await resetResponse.Content.ReadFromJsonAsync<AdminResetCredentialsResponse>();
+        Assert.NotNull(reset);
+        Assert.True(reset.PasswordChangeRequired);
+        Assert.False(string.IsNullOrWhiteSpace(reset.TemporaryPassword));
+
+        using var oldTokenRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/system/whoami",
+            member);
+        using var oldTokenResponse = await _client.SendAsync(oldTokenRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, oldTokenResponse.StatusCode);
+
+        using var loginResponse = await LoginAsync(email, reset.TemporaryPassword);
+        Assert.Equal(System.Net.HttpStatusCode.OK, loginResponse.StatusCode);
+        var login = await loginResponse.Content.ReadFromJsonAsync<AuthResponse>();
+        Assert.NotNull(login);
+        Assert.True(login.PasswordChangeRequired);
+    }
+
+    [Fact]
     public async Task Document_endpoints_require_authentication()
     {
         using var list = await _client.GetAsync("/api/documents");

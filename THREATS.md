@@ -24,6 +24,9 @@ yet implemented.
 | Secret exposure from source or browser bundle | JWT secret is configuration-only; Angular contains only a public API base URL | AWS application secrets and narrowly scoped storage credentials are not configured. |
 | Vulnerable build/test tool dependency | Production `npm audit --omit=dev` reports no vulnerabilities | Full audit still reports moderate transitive development-tool advisories (including glob/minimatch/uuid); review and update before a production CI/deployment setup. |
 | Cross-site request abuse | API currently uses bearer tokens and configured CORS origin | No refresh-cookie flow exists; if added, use secure HttpOnly cookies and CSRF defenses. CORS is not an authorization control. |
+| Administrator becomes an unrestricted document reader | Admin APIs return metadata, permission history, and audit fields only; document endpoints still require ownership or an active document grant | Integration tests prove an Administrator cannot download a member document merely by role. Admin document reassignment can intentionally grant a member ownership and revokes existing grants. |
+| Abuse of administrator investigation tools | Admin routes require the sole Administrator role; searches are paginated; exports are capped and omit event metadata JSON; permission revocation and ownership reassignment require a reason and append audit events | Review audit access and exported CSV handling operationally. Admin credential delivery remains out-of-band; there is no MFA or notification channel. |
+| Security alert false positives or missed activity | Initial heuristics detect >=5 audited denials per actor/IP in 10 minutes and >=20 successful downloads per actor/IP in one hour | These are basic rules, not intrusion detection. Anonymous route failures are not recorded here; device fingerprinting, notifications, configurable thresholds, and rate-window tests remain future work. |
 
 ## Accepted Sprint 0 limitations
 
@@ -37,3 +40,8 @@ yet implemented.
   remain unimplemented.
 - Local Compose credentials are deliberately disposable and must never be reused
   outside a developer machine.
+- Administrator settings are currently read-only. Alert thresholds are fixed
+  heuristics; external sharing means named registered accounts only, with no
+  guest links or expiration. Orphan ownership reassignment is supported, but
+  quarantine, retention/recovery, deletion approval, MFA, and self-service
+  password recovery are not.

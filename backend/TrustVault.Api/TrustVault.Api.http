@@ -1,4 +1,7 @@
 @TrustVault.Api_HostAddress = http://localhost:5106
+@accessToken = replace-with-a-local-admin-access-token
+@documentId = 00000000-0000-0000-0000-000000000001
+@memberId = 00000000-0000-0000-0000-000000000002
 
 ### Sign in as an administrator or managed member
 POST {{TrustVault.Api_HostAddress}}/api/auth/login
@@ -27,6 +30,102 @@ Authorization: Bearer {{accessToken}}
   "email": "new-member@example.test",
   "role": "Viewer"
 }
+
+###
+
+### Administrator dashboard (counts only)
+GET {{TrustVault.Api_HostAddress}}/api/admin/dashboard
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Search audit events
+GET {{TrustVault.Api_HostAddress}}/api/admin/audit?documentId={{documentId}}&outcome=DENIED&page=1&pageSize=50
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Export filtered audit metadata as CSV
+GET {{TrustVault.Api_HostAddress}}/api/admin/audit/export?documentId={{documentId}}
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Verify the currently stored audit chain
+GET {{TrustVault.Api_HostAddress}}/api/admin/audit/verify
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Review rule-based security alerts
+GET {{TrustVault.Api_HostAddress}}/api/admin/security-alerts
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Search document metadata only
+GET {{TrustVault.Api_HostAddress}}/api/admin/documents?search=contract&page=1&pageSize=50
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Review current and historical permissions
+GET {{TrustVault.Api_HostAddress}}/api/admin/documents/{{documentId}}/permissions
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Revoke a permission (reason required)
+DELETE {{TrustVault.Api_HostAddress}}/api/admin/documents/{{documentId}}/permissions/{{memberId}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "reason": "Incident response review"
+}
+
+###
+
+### Review active named-user shares
+GET {{TrustVault.Api_HostAddress}}/api/admin/shares?search=member@example.test
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+### Reassign document owner (reason required; all existing grants are revoked)
+POST {{TrustVault.Api_HostAddress}}/api/admin/documents/{{documentId}}/reassign-owner
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "newOwnerId": "{{memberId}}",
+  "reason": "Original owner account was removed"
+}
+
+###
+
+### Reset member credentials (temporary password is returned once)
+POST {{TrustVault.Api_HostAddress}}/api/admin/members/{{memberId}}/reset-credentials
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "reason": "Member reported compromised password"
+}
+
+###
+
+### View safe, read-only application policy
+GET {{TrustVault.Api_HostAddress}}/api/admin/settings
+Accept: application/json
+Authorization: Bearer {{accessToken}}
 
 ###
 

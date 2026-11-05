@@ -1,0 +1,139 @@
+:host {
+  display: block;
+  margin: 2rem 0;
+  text-align: left;
+}
+
+.admin-console {
+  border-top: 1px solid #e1e7ef;
+  padding-top: 1.5rem;
+}
+
+.admin-notice {
+  padding: 0.8rem;
+  border: 1px solid #b7ddd1;
+  border-radius: 0.55rem;
+  background: #f1faf6;
+  color: #246653;
+  line-height: 1.5;
+}
+
+.admin-navigation,
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.admin-navigation button,
+.admin-actions button,
+.admin-console button {
+  min-height: 2.5rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.5rem;
+  background: #f5f7fb;
+  color: #183b67;
+  cursor: pointer;
+  font: inherit;
+}
+
+.admin-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.7rem;
+}
+
+.admin-stat-grid div,
+.admin-results > li {
+  padding: 0.8rem;
+  border: 1px solid #e1e7ef;
+  border-radius: 0.55rem;
+  background: #fff;
+}
+
+.admin-stat-grid dt,
+.admin-settings-list dt {
+  color: #657187;
+  font-size: 0.85rem;
+}
+
+.admin-stat-grid dd {
+  margin: 0.3rem 0 0;
+  color: #183b67;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.admin-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.7rem;
+}
+
+.admin-filter-grid label,
+.admin-permission-list label {
+  display: grid;
+  gap: 0.35rem;
+  color: #28374d;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.admin-filter-grid input,
+.admin-filter-grid select,
+.admin-permission-list input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.55rem;
+  border: 1px solid #cbd4df;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #172033;
+  font: inherit;
+}
+
+.admin-results,
+.admin-permission-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.8rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-results > li,
+.admin-permission-list > li {
+  display: grid;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-results span,
+.admin-results time {
+  color: #526178;
+  font-size: 0.85rem;
+}
+
+.admin-permission-list {
+  margin-left: 1rem;
+}
+
+.admin-settings-list {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) 2fr;
+  gap: 0.6rem 1rem;
+}
+
+.admin-settings-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 34rem) {
+  .admin-settings-list {
+    grid-template-columns: 1fr;
+  }
+}

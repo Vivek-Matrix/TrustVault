@@ -6,6 +6,7 @@ import {
   AdminMember,
   AdminMembersService,
   CreatedMember,
+  TemporaryCredentials,
 } from './admin-members.service';
 
 @Component({
@@ -52,11 +53,17 @@ import {
               <span>
                 <strong>{{ member.email }}</strong>
                 <span>{{ member.roles.join(', ') }}</span>
+                <span>Account ID: {{ member.userId }}</span>
                 @if (member.isSuspended) {
                   <span class="member-status">Removed</span>
                 }
               </span>
               @if (!member.isSuspended) {
+                <button class="secondary-button" type="button"
+                  [disabled]="removingUserId() === member.userId"
+                  (click)="resetCredentials(member)">
+                  Reset credentials
+                </button>
                 <button class="secondary-button" type="button"
                   [disabled]="removingUserId() === member.userId"
                   (click)="remove(member)">
@@ -76,7 +83,7 @@ export class AdminMembersComponent {
   private readonly service = inject(AdminMembersService);
 
   readonly members = signal<AdminMember[]>([]);
-  readonly createdMember = signal<CreatedMember | null>(null);
+  readonly createdMember = signal<CreatedMember | TemporaryCredentials | null>(null);
   readonly message = signal<string | null>(null);
   readonly loading = signal(false);
   readonly creating = signal(false);
@@ -124,6 +131,27 @@ export class AdminMembersComponent {
       .pipe(finalize(() => this.removingUserId.set(null)))
       .subscribe({
         next: () => this.loadMembers(),
+        error: (error: unknown) => this.message.set(this.describeError(error)),
+      });
+  }
+
+  resetCredentials(member: AdminMember): void {
+    const reason = window.prompt(`Why are you resetting credentials for ${member.email}?`);
+    if (reason === null) {
+      return;
+    }
+    if (reason.trim().length < 8) {
+      this.message.set('Enter a reason of at least 8 characters.');
+      return;
+    }
+
+    this.message.set(null);
+    this.createdMember.set(null);
+    this.removingUserId.set(member.userId);
+    this.service.resetCredentials(member.userId, reason.trim())
+      .pipe(finalize(() => this.removingUserId.set(null)))
+      .subscribe({
+        next: (created) => this.createdMember.set(created),
         error: (error: unknown) => this.message.set(this.describeError(error)),
       });
   }

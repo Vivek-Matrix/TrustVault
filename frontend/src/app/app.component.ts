@@ -6,10 +6,17 @@ import { finalize } from 'rxjs';
 import { AuthService } from './auth/auth.service';
 import { DocumentsPanelComponent } from './documents/documents-panel.component';
 import { AdminMembersComponent } from './admin/admin-members.component';
+import { AdminConsoleComponent } from './admin/admin-console.component';
 
 @Component({
   selector: 'app-root',
-  imports: [AdminMembersComponent, DocumentsPanelComponent, RouterOutlet, ReactiveFormsModule],
+  imports: [
+    AdminConsoleComponent,
+    AdminMembersComponent,
+    DocumentsPanelComponent,
+    RouterOutlet,
+    ReactiveFormsModule,
+  ],
   template: `
     <main>
       <header class="brand">
@@ -61,6 +68,7 @@ import { AdminMembersComponent } from './admin/admin-members.component';
               </form>
             </section>
           } @else if (session.roles.includes('Administrator')) {
+            <app-admin-console />
             <app-admin-members />
           } @else {
             <app-documents-panel />
