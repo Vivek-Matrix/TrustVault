@@ -23,7 +23,7 @@ has open items:
 | CI pipeline is green | Done | The owner confirmed Sprint 4 and Sprint 5 GitHub Actions workflows passed. Sprint 6 CI validation is pending. |
 | Seed script and sample users/documents exist | Not done | No seed script or demo accounts/documents are included. |
 | Secure deployment target exists | Not done | AWS is the selected provider and `ap-southeast-2` is the requested Region, but no AWS application resources or public deployment exist. The reported $100 credits are not a monthly spending cap. |
-| AWS Agent Toolkit is usable with the project's AWS profile | Partial | AWS CLI v2 and `uv` are installed, `trustvault-dev` sign-in succeeded, and the skill catalog returned 119 skills. The setup wizard was not run because the workspace already has a remote HTTP AWS MCP endpoint that must not be overwritten. See [deployment prerequisites](./deployment.md#aws-agent-toolkit-setup). |
+| AWS Agent Toolkit is usable with the project's AWS profile | Done | AWS CLI v2 and `uv` are installed, the `default` profile is authenticated for `ap-southeast-2`, default AWS skills are installed, and the generated local MCP server entries allow both `trustvault-dev` and `default`. The existing workspace remote HTTP endpoint is preserved. See [deployment prerequisites](./deployment.md#aws-agent-toolkit-setup). |
 
 Do not mark Sprint 0 done until the remaining required checks are completed or
 the product owner explicitly accepts a documented scope change. Do not use

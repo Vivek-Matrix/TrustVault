@@ -3,9 +3,9 @@
 ## Hosting decision
 
 AWS is the selected cloud provider for a future internet deployment. The AWS
-experience rules are present in `.github/copilot-instructions.md`, but the AWS
-CLI profile is for local development only. TrustVault has not been deployed to
-AWS and no AWS application, database, or storage resources have been created.
+experience rules are present in `.github/copilot-instructions.md`. TrustVault
+has not been deployed to AWS and no AWS application, database, or storage
+resources have been created.
 
 The previous Render setup instructions are superseded. Do not create Render
 services by following earlier copies of this plan.
@@ -28,20 +28,20 @@ services by following earlier copies of this plan.
 - Sprint 4 now separates the PostgreSQL migrator and runtime roles in local
   setup and CI. The production database and secret-injection design are not
   configured.
-- The requested selected Region is `ap-southeast-2`. The owner confirmed the
-  `trustvault-dev` profile; its AWS CLI sign-in succeeded and its configured
-  Region is `ap-southeast-2`.
+- The selected Region is `ap-southeast-2`. The `default` AWS CLI profile is
+  authenticated and its STS identity check succeeded.
 - The AWS CLI v2 and `uv` are available locally, and the Agent Toolkit skill
-  catalog returned 119 skills.
-- The workspace `.vscode/mcp.json` already contains an AWS MCP remote HTTP
-  endpoint. The local Agent Toolkit setup wizard was not run because its
-  generated profile-bound server could conflict with that existing connection.
-  The existing config was left untouched.
-- The owner confirmed the selected Region `ap-southeast-2` and $100.00 in
-  remaining credits. Credits may expire or have service restrictions and do
-  not impose a recurring monthly spend limit. Confirm the project spend limit,
-  service eligibility, and full design cost in AWS Settings before creating
-  AWS application resources.
+  setup completed. Its generated `aws-mcp` servers in Claude Code, Cursor, and
+  Gemini CLI include both the existing `trustvault-dev` profile and `default`.
+  The workspace `.vscode/mcp.json` remote HTTP server was preserved unchanged.
+- The AWS project is on the `FREE` plan with $100 in remaining credits. Credits
+  do not set a monthly spend limit. The owner selected an AWS-generated
+  hostname and asked to see an estimate before choosing a recurring monthly
+  budget. No resources may be provisioned until the complete estimate is
+  reviewed and approved.
+- The owner prefers the more security-focused document design: private S3
+  quarantine with asynchronous scanning. This is a design preference, not an
+  implemented pipeline or approval to provision AWS resources.
 - The local Compose PostgreSQL service is healthy, and the EF migrator
   successfully applied migrations to its existing database. The named database
   volume was preserved. The migrator also succeeded against a separate empty
@@ -52,55 +52,51 @@ services by following earlier copies of this plan.
 
 ## AWS Agent Toolkit setup
 
-The owner confirmed the `trustvault-dev` profile. AWS CLI v2 and `uv` are
-installed, browser sign-in succeeded, and the STS identity check passed.
-Credentials last 12 hours and can be renewed for up to 90 days without repeating
+The `default` profile is configured for `ap-southeast-2`; browser sign-in and
+the STS identity check succeeded. AWS CLI sign-in credentials are temporary.
+They are valid for 12 hours and can be renewed for 90 days without repeating
 browser authentication. Never request or put AWS access keys or secret keys in
 chat or source control.
 
 The verified profile commands were:
 
 ```powershell
-aws configure set region ap-southeast-2 --profile trustvault-dev
-aws login --region ap-southeast-2 --profile trustvault-dev
-aws sts get-caller-identity --profile trustvault-dev
-aws agent-toolkit list-available-skills --region us-east-1 --profile trustvault-dev
+aws configure set region ap-southeast-2 --profile default
+aws login --region ap-southeast-2 --profile default
+aws sts get-caller-identity --profile default
+aws agent-toolkit list-available-skills --region us-east-1 --profile default
 ```
 
-The final command returned 119 skills. The setup guide's wizard command is:
+The Agent Toolkit setup command completed:
 
 ```powershell
-aws configure agent-toolkit --yes --region us-east-1 --profile trustvault-dev
+aws configure agent-toolkit --yes --region us-east-1 --profile default
 ```
 
-It was not run because the existing workspace `aws-mcp` entry is a remote HTTP
-server, not the generated local server configuration that accepts
-`AWS_MCP_PROXY_PROFILES`. Do not add that variable to the remote HTTP entry or
-overwrite it. If a profile-bound local MCP server is needed later, add it as a
-separate server after reviewing the generated configuration. See the
-[official Agent Toolkit setup guide](https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/refs/heads/main/setup-instructions/setup.md)
-for the remaining configuration steps.
-
-The toolkit management command uses `us-east-1` per the setup guide; this does
-not change the application's selected Region. Regional application resources
-must remain in `ap-southeast-2`. If the toolkit is configured later, preserve
-the current remote HTTP entry and set `AWS_MCP_PROXY_PROFILES=trustvault-dev`
-only on the separate generated local server.
+The wizard installed the default AWS skills and confirmed the existing local
+MCP server configurations. The `AWS_MCP_PROXY_PROFILES` value in the generated
+local `aws-mcp` entries is `trustvault-dev default`; the existing workspace
+remote HTTP entry was not changed. The Toolkit management command uses
+`us-east-1` per the setup guide; this does not change the application's selected
+Region. All Regional application resources must remain in `ap-southeast-2`.
+See the
+[official Agent Toolkit setup guide](https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/refs/heads/main/setup-instructions/setup.md).
 
 ## Before deployment work
 
 1. In AWS Settings, confirm the project's selected Region is `ap-southeast-2`
    and review Billing, the remaining credit balance, and the project spend
-   limit. New AWS experience projects must use their assigned Region for
-   Regional resources.
+   limit. No recurring monthly budget has been selected yet. New AWS experience
+   projects must use their assigned Region for Regional resources.
 2. Verify service availability and eligibility for this project before choosing
    services. An active AWS subscription or an installed toolkit does not imply
    that a service is free or enabled.
 3. Design an AWS deployment that supports the existing .NET Docker container and
    PostgreSQL. Include container hosting, image storage, database, networking,
    secrets, logs, health checks, a private isolated Word-converter service, and
-   a controlled migration step. Review the complete expected cost before
-   provisioning.
+   a controlled migration step. The requested document pipeline is private S3
+   quarantine with asynchronous scanning. Review the complete expected cost
+   before provisioning.
 4. Do not put database credentials, signing keys, or AWS credentials in Git,
    Docker build arguments, frontend files, or chat. Use an AWS secret-management
    service if a deployment is approved.
@@ -129,10 +125,10 @@ and full cost estimate. The intended security behavior is:
 - Serve clean content only through the API after live owner/grant authorization.
   Keep scanning and object-storage credentials least-privileged and separate
   from the API runtime and database migrator.
-- Decide durable storage, scanner service/isolation, retry/queue behavior,
-  retention/cleanup, observability, and backup/restore together. No AWS storage,
-  scanning, or hosting services have been selected or provisioned for this
-  design gate.
+- Implement and test durable storage, scanner service/isolation, retry/queue
+  behavior, retention/cleanup, observability, and backup/restore together. No
+  AWS storage, scanning, or hosting resources have been provisioned; the
+  service-specific design remains pending.
 
 ## Security-readiness roadmap
 

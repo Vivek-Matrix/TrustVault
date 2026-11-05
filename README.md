@@ -27,15 +27,15 @@ implemented; production deployment is not.
 
 AWS is the selected cloud provider for a future internet deployment. The AWS
 experience guidance is present in `.github/copilot-instructions.md`. AWS CLI
-v2 and `uv` are available locally, and the `trustvault-dev` profile has been
+v2, `uv`, and the Agent Toolkit are installed; the `default` profile is
 authenticated for `ap-southeast-2`. The existing workspace AWS MCP entry uses
-a remote HTTP endpoint; the local Agent Toolkit wizard was left unrun to avoid
-overwriting that connection. TrustVault is not deployed to AWS and no AWS
-application or database resources have been created. The owner reports $100 in
-AWS credits and confirmed the selected Region is `ap-southeast-2`; credits are
-not a monthly spend cap. Confirm the project spend limit, service eligibility,
-and a complete cost estimate before provisioning anything. The current Docker
-image is built by CI; it is not published to AWS.
+a remote HTTP endpoint and was preserved. TrustVault is not deployed to AWS
+and no AWS application or database resources have been created. The AWS
+project is on the Free plan with $100 in credits; credits are not a monthly
+spend limit. The owner requested a full cost estimate before selecting a
+recurring budget or approving resources. The preferred document design is
+private S3 quarantine with asynchronous scanning, but it is not implemented.
+The current Docker image is built by CI; it is not published to AWS.
 
 The earlier Render deployment instructions are superseded. See the
 [AWS deployment status and prerequisites](docs/deployment.md) before taking
