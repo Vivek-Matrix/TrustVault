@@ -16,7 +16,7 @@ services:
       timeout: 5s
       retries: 10
   clamav:
-    image: clamav/clamav:1.4.3
+    image: clamav/clamav:1.4.6
     networks:
       - clamav-private
     ports:
