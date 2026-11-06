@@ -22,6 +22,7 @@ RUN dotnet publish backend/TrustVault.Migrator/TrustVault.Migrator.csproj --conf
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
 WORKDIR /app
+RUN apk add --no-cache krb5-libs
 ENV ASPNETCORE_HTTP_PORTS=10000
 EXPOSE 10000
 COPY --from=backend-build --chown=$APP_UID:$APP_UID /out/api/ ./
