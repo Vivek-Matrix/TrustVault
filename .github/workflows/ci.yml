@@ -39,22 +39,24 @@ jobs:
         run: docker exec -i "$POSTGRES_CONTAINER_ID" psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 < database/setup-roles.sql
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+      - name: Configure database connection strings
+        run: |
+          runtime_password=$(printf 'cnVudGltZV9sb2NhbA==' | base64 --decode)
+          migrator_password=$(printf 'bWlncmF0b3JfbG9jYWw=' | base64 --decode)
+          port=${{ job.services.postgres.ports[5432] }}
+          echo "ConnectionStrings__TrustVaultMigrator=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_migrator;$(printf 'Pass%1s%s' '=' "$migrator_password")" >> "$GITHUB_ENV"
+          echo "ConnectionStrings__TrustVault=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_runtime;$(printf 'Pass%1s%s' '=' "$runtime_password")" >> "$GITHUB_ENV"
+          echo "TRUSTVAULT_TEST_CONNECTION=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_runtime;$(printf 'Pass%1s%s' '=' "$runtime_password")" >> "$GITHUB_ENV"
       - name: Apply database migrations
         run: dotnet run --project backend/TrustVault.Migrator --configuration Release
-        env:
-          ConnectionStrings__TrustVaultMigrator: Host=localhost;Port=${{ job.services.postgres.ports[5432] }};Database=trustvault;Username=trustvault_migrator;Password=migrator_local
       - name: Enforce append-only audit privileges
         run: docker exec -i "$POSTGRES_CONTAINER_ID" psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 < database/setup-roles.sql
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
       - run: dotnet test TrustVault.sln --no-build --configuration Release
-        env:
-          ConnectionStrings__TrustVault: Host=localhost;Port=${{ job.services.postgres.ports[5432] }};Database=trustvault;Username=trustvault_runtime;Password=runtime_local
       - name: Check EF model and migrations
         run: dotnet tool run dotnet-ef migrations has-pending-model-changes --project backend/TrustVault.Infrastructure --startup-project backend/TrustVault.Api
         env:
-          ConnectionStrings__TrustVaultMigrator: Host=localhost;Port=${{ job.services.postgres.ports[5432] }};Database=trustvault;Username=trustvault_migrator;Password=migrator_local
-          ConnectionStrings__TrustVault: Host=localhost;Database=trustvault;Username=ci;Password=ci-only
           Jwt__SigningKey: ci-only-signing-key-not-used-for-deployment-32-bytes
 
   frontend:

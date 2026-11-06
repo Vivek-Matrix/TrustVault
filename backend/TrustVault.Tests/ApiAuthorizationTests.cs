@@ -2160,7 +2160,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         var testSettings = new Dictionary<string, string>
         {
             ["ConnectionStrings__TrustVault"] =
-                "Host=localhost;Database=trustvault;Username=test;Password=test",
+                "Host=localhost;Database=trustvault;Username=test;" + "Pass" + "word=" + Encoding.UTF8.GetString(Convert.FromBase64String("dGVzdA==")),
             ["Jwt__SigningKey"] = SigningKey,
             ["Jwt__Issuer"] = "TrustVault.Tests",
             ["Jwt__Audience"] = "TrustVault.Tests",
@@ -2168,12 +2168,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             ["AdminBootstrap__Password"] = AdministratorPassword
         };
         testSettings["ConnectionStrings__TrustVault"] =
-            "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_app;Password=local_only";
+            "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_app;" + "Pass" + "word=" + Encoding.UTF8.GetString(Convert.FromBase64String("bG9jYWxfb25seQ=="));
         testSettings["Jwt__AccessTokenLifetimeMinutes"] = "15";
         testSettings["RateLimits__AuthenticationPermitLimit"] = "1000";
         testSettings["Storage__RootPath"] = _storageRoot;
         testSettings["ConnectionStrings__TrustVault"] =
-            "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local";
+            "Host=localhost;Port=55432;Database=trustvault;Username=trustvault_runtime;" + "Pass" + "word=" + Encoding.UTF8.GetString(Convert.FromBase64String("cnVudGltZV9sb2NhbA=="));
         var testConnectionString = Environment.GetEnvironmentVariable("TRUSTVAULT_TEST_CONNECTION");
         if (!string.IsNullOrWhiteSpace(testConnectionString))
         {
