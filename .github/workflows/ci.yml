@@ -49,6 +49,7 @@ jobs:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
       - run: dotnet test TrustVault.sln --no-build --configuration Release
         env:
+          TRUSTVAULT_TEST_CONNECTION: Host=localhost;Port=${{ job.services.postgres.ports[5432] }};Database=trustvault;Username=trustvault_runtime;******
           ConnectionStrings__TrustVault: Host=localhost;Port=${{ job.services.postgres.ports[5432] }};Database=trustvault;Username=trustvault_runtime;Password=runtime_local
       - name: Check EF model and migrations
         run: dotnet tool run dotnet-ef migrations has-pending-model-changes --project backend/TrustVault.Infrastructure --startup-project backend/TrustVault.Api
