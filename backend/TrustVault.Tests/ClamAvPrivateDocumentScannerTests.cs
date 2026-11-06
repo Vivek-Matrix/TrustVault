@@ -9,6 +9,22 @@ namespace TrustVault.Tests;
 
 public sealed class ClamAvPrivateDocumentScannerTests
 {
+    [Fact]
+    public async Task Readiness_probe_requires_a_PONG_response()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var server = RespondToPingAsync(listener);
+        var scanner = new ClamAvPrivateDocumentScanner(
+            "127.0.0.1",
+            port,
+            TimeSpan.FromSeconds(5));
+
+        await scanner.CheckReadinessAsync(CancellationToken.None);
+        await server;
+    }
+
     [Theory]
     [InlineData("stream: OK\0", DocumentScanVerdict.Clean)]
     [InlineData("stream: Test.Signature FOUND\0", DocumentScanVerdict.Rejected)]
@@ -100,6 +116,16 @@ public sealed class ClamAvPrivateDocumentScannerTests
 
         Assert.Equal(expectedContent, received.ToArray());
         await stream.WriteAsync(Encoding.ASCII.GetBytes(response));
+    }
+
+    private static async Task RespondToPingAsync(TcpListener listener)
+    {
+        using var client = await listener.AcceptTcpClientAsync();
+        await using var stream = client.GetStream();
+        var command = new byte["PING\n"u8.Length];
+        await ReadExactlyAsync(stream, command);
+        Assert.Equal("PING\n", Encoding.ASCII.GetString(command));
+        await stream.WriteAsync("PONG"u8.ToArray());
     }
 
     private static async Task ReadExactlyAsync(Stream stream, Memory<byte> buffer)

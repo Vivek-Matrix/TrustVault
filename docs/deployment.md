@@ -22,7 +22,7 @@ services by following earlier copies of this plan.
   It does not publish the image to a registry or deploy it to AWS.
 - The API exposes an anonymous readiness probe at `/api/system/ready` for a
   load balancer or container orchestrator. It returns only a ready/not-ready
-  status and HTTP 503 when PostgreSQL cannot be reached.
+  status and HTTP 503 unless both PostgreSQL and ClamAV respond successfully.
 - The backend uses PostgreSQL. AWS database selection and network design have
   not been completed.
 - Sprint 4 now separates the PostgreSQL migrator and runtime roles in local
@@ -42,6 +42,35 @@ services by following earlier copies of this plan.
 - The owner prefers the more security-focused document design: private S3
   quarantine with asynchronous scanning. This is a design preference, not an
   implemented pipeline or approval to provision AWS resources.
+  catalog returned 119 skills.
+
+## Private ClamAV deployment requirements
+
+When deploying the API and ClamAV as separate services, configure these API
+variables through the platform's secret/configuration settings:
+
+```text
+MalwareScanning__ClamAv__Host=<private ClamAV service hostname>
+MalwareScanning__ClamAv__Port=3310
+MalwareScanning__ClamAv__TimeoutSeconds=60
+```
+
+Keep TCP port 3310 private and attach both services to the same private
+network. The ClamAV service is ready only after its daemon accepts `PING` and
+returns `PONG`; signature-download completion alone is not a readiness signal.
+Do not use `127.0.0.1`, a wildcard bind address, or a public ClamAV endpoint for
+the API's production configuration. If the daemon repeatedly fails to listen,
+check its memory/restart events and verify private DNS and IPv4/IPv6
+reachability from the API service before changing application code.
+- The workspace `.vscode/mcp.json` already contains an AWS MCP remote HTTP
+  endpoint. The local Agent Toolkit setup wizard was not run because its
+  generated profile-bound server could conflict with that existing connection.
+  The existing config was left untouched.
+- The owner confirmed the selected Region `ap-southeast-2` and $100.00 in
+  remaining credits. Credits may expire or have service restrictions and do
+  not impose a recurring monthly spend limit. Confirm the project spend limit,
+  service eligibility, and full design cost in AWS Settings before creating
+  AWS application resources.
 - The local Compose PostgreSQL service is healthy, and the EF migrator
   successfully applied migrations to its existing database. The named database
   volume was preserved. The migrator also succeeded against a separate empty

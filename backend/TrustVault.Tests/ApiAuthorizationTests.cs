@@ -2251,6 +2251,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         private readonly ConcurrentDictionary<string, int> _retryAttempts = new();
 
+        public Task CheckReadinessAsync(CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public async Task<DocumentScanVerdict> ScanAsync(
             Stream content,
             CancellationToken cancellationToken)

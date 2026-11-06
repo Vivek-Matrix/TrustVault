@@ -1,5 +1,6 @@
 using System.Text;
 using System.Security.Claims;
+using System.Net;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -60,16 +61,26 @@ if (string.IsNullOrWhiteSpace(scannerHost)
 {
     throw new InvalidOperationException("The ClamAV scanning configuration is invalid.");
 }
+if (!builder.Environment.IsDevelopment()
+    && (scannerHost.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        || (IPAddress.TryParse(scannerHost, out var scannerAddress)
+            && (IPAddress.IsLoopback(scannerAddress)
+                || IPAddress.Any.Equals(scannerAddress)
+                || IPAddress.IPv6Any.Equals(scannerAddress)))))
+{
+    throw new InvalidOperationException(
+        "Production ClamAV scanning must use a private, explicitly configured host.");
+}
 var authenticationRateLimit = builder.Configuration.GetValue(
     "RateLimits:AuthenticationPermitLimit",
     10);
 builder.Services.AddSingleton<IPrivateDocumentStorage>(
     new FileSystemPrivateDocumentStorage(documentStorageRoot));
-builder.Services.AddSingleton<IPrivateDocumentScanner>(
-    new ClamAvPrivateDocumentScanner(
+builder.Services.AddSingleton<IPrivateDocumentScanner>(services => new ClamAvPrivateDocumentScanner(
         scannerHost,
         scannerPort,
-        TimeSpan.FromSeconds(scannerTimeoutSeconds)));
+        TimeSpan.FromSeconds(scannerTimeoutSeconds),
+        services.GetRequiredService<ILogger<ClamAvPrivateDocumentScanner>>()));
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;

@@ -42,7 +42,7 @@ anonymous. The browser's route guards are not an authorization boundary.
 | POST | `/api/documents/{id}/grants` | Document owner | Grant `READ` or `EDIT` access to an existing account by email |
 | DELETE | `/api/documents/{id}/grants/{userId}` | Document owner | Revoke that user's active grant; retain grant history |
 | GET | `/api/system/health` | Anonymous | Process health probe |
-| GET | `/api/system/ready` | Anonymous; returns only ready/not-ready status | Readiness probe for deployment health checks; returns 503 when PostgreSQL cannot be reached |
+| GET | `/api/system/ready` | Anonymous; returns only ready/not-ready status | Readiness probe for deployment health checks; returns 503 when PostgreSQL or ClamAV cannot be reached |
 | GET | `/api/system/whoami` | Any authenticated JWT | Return the caller's subject and role claims |
 | GET | `/swagger` | Anonymous, Development only | Development API documentation |
 
@@ -132,7 +132,10 @@ For local development, Docker Compose starts a ClamAV daemon bound to
 `127.0.0.1:3310`; configure `MalwareScanning:ClamAv:Host`,
 `MalwareScanning:ClamAv:Port`, and `MalwareScanning:ClamAv:TimeoutSeconds` for
 other local arrangements. ClamAV may need time to download signatures after its
-first start. A scanner connection failure never marks a file clean.
+first start. The readiness probe sends ClamAV `PING` and requires `PONG`.
+Production deployments must set the host to the scanner's private service
+hostname; loopback and wildcard hosts are rejected outside Development. A
+scanner connection failure never marks a file clean.
 
 TXT content is editable in the browser. Editing DOC/DOCX requires the separate
 LibreOffice converter service on the private converter network. It receives

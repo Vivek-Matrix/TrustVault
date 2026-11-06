@@ -8,5 +8,7 @@ public enum DocumentScanVerdict
 
 public interface IPrivateDocumentScanner
 {
+    Task CheckReadinessAsync(CancellationToken cancellationToken);
+
     Task<DocumentScanVerdict> ScanAsync(Stream content, CancellationToken cancellationToken);
 }
