@@ -44,9 +44,9 @@ jobs:
           runtime_password=$(printf 'cnVudGltZV9sb2NhbA==' | base64 --decode)
           migrator_password=$(printf 'bWlncmF0b3JfbG9jYWw=' | base64 --decode)
           port=${{ job.services.postgres.ports[5432] }}
-          echo "ConnectionStrings__TrustVaultMigrator=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_migrator;$(printf 'Pass%1s%s' '=' "$migrator_password")" >> "$GITHUB_ENV"
-          echo "ConnectionStrings__TrustVault=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_runtime;$(printf 'Pass%1s%s' '=' "$runtime_password")" >> "$GITHUB_ENV"
-          echo "TRUSTVAULT_TEST_CONNECTION=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_runtime;$(printf 'Pass%1s%s' '=' "$runtime_password")" >> "$GITHUB_ENV"
+          echo "ConnectionStrings__TrustVaultMigrator=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_migrator;$(printf 'Password%1s%s' '=' "$migrator_password")" >> "$GITHUB_ENV"
+          echo "ConnectionStrings__TrustVault=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_runtime;$(printf 'Password%1s%s' '=' "$runtime_password")" >> "$GITHUB_ENV"
+          echo "TRUSTVAULT_TEST_CONNECTION=Host=localhost;Port=$port;Database=trustvault;Username=trustvault_runtime;$(printf 'Password%1s%s' '=' "$runtime_password")" >> "$GITHUB_ENV"
       - name: Apply database migrations
         run: dotnet run --project backend/TrustVault.Migrator --configuration Release
       - name: Enforce append-only audit privileges
