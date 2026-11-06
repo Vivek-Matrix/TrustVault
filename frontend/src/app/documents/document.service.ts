@@ -1,6 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
-import { Observable } from 'rxjs';
+import { map, Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 
 export interface DocumentFilters {
@@ -85,7 +85,9 @@ export class DocumentService {
       params = params.set('createdTo', filters.createdTo);
     }
 
-    return this.http.get<DocumentItem[]>(this.documentsUrl, { params });
+    return this.http
+      .get<DocumentItem[]>(this.documentsUrl, { params })
+      .pipe(map((documents) => documents.map((document) => this.normalizeDocument(document))));
   }
 
   upload(title: string, category: string, file: File): Observable<DocumentItem> {
@@ -93,7 +95,9 @@ export class DocumentService {
     formData.append('Title', title);
     formData.append('Category', category);
     formData.append('File', file, file.name);
-    return this.http.post<DocumentItem>(this.documentsUrl, formData);
+    return this.http
+      .post<DocumentItem>(this.documentsUrl, formData)
+      .pipe(map((document) => this.normalizeDocument(document)));
   }
 
   download(id: string): Observable<Blob> {
@@ -103,23 +107,36 @@ export class DocumentService {
   }
 
   retryScan(documentId: string): Observable<DocumentScanStatusItem> {
-    return this.http.post<DocumentScanStatusItem>(
-      `${this.documentsUrl}/${encodeURIComponent(documentId)}/scan/retry`,
-      {},
-    );
+    return this.http
+      .post<DocumentScanStatusItem>(
+        `${this.documentsUrl}/${encodeURIComponent(documentId)}/scan/retry`,
+        {},
+      )
+      .pipe(map((status) => this.normalizeScanStatus(status)));
   }
 
   retryVersionScan(documentId: string, versionNumber: number): Observable<DocumentScanStatusItem> {
-    return this.http.post<DocumentScanStatusItem>(
-      `${this.documentsUrl}/${encodeURIComponent(documentId)}/versions/${versionNumber}/scan/retry`,
-      {},
-    );
+    return this.http
+      .post<DocumentScanStatusItem>(
+        `${this.documentsUrl}/${encodeURIComponent(documentId)}/versions/${versionNumber}/scan/retry`,
+        {},
+      )
+      .pipe(map((status) => this.normalizeScanStatus(status)));
   }
 
   listGrants(documentId: string): Observable<DocumentGrantItem[]> {
-    return this.http.get<DocumentGrantItem[]>(
-      `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants`,
-    );
+    return this.http
+      .get<DocumentGrantItem[]>(
+        `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants`,
+      )
+      .pipe(
+        map((grants) =>
+          grants.map((grant) => ({
+            ...grant,
+            permission: grant.permission.toUpperCase() as DocumentGrantItem['permission'],
+          })),
+        ),
+      );
   }
 
   listAudits(documentId: string): Observable<DocumentAuditItem[]> {
@@ -133,10 +150,17 @@ export class DocumentService {
     email: string,
     permission: 'READ' | 'EDIT',
   ): Observable<DocumentGrantItem> {
-    return this.http.post<DocumentGrantItem>(
-      `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants`,
-      { email, permission },
-    );
+    return this.http
+      .post<DocumentGrantItem>(
+        `${this.documentsUrl}/${encodeURIComponent(documentId)}/grants`,
+        { email, permission },
+      )
+      .pipe(
+        map((grant) => ({
+          ...grant,
+          permission: grant.permission.toUpperCase() as DocumentGrantItem['permission'],
+        })),
+      );
   }
 
   revokeAccess(documentId: string, userId: string): Observable<void> {
@@ -153,10 +177,12 @@ export class DocumentService {
     documentId: string,
     metadata: { title: string; description: string; category: string },
   ): Observable<DocumentItem> {
-    return this.http.put<DocumentItem>(
-      `${this.documentsUrl}/${encodeURIComponent(documentId)}`,
-      metadata,
-    );
+    return this.http
+      .put<DocumentItem>(
+        `${this.documentsUrl}/${encodeURIComponent(documentId)}`,
+        metadata,
+      )
+      .pipe(map((document) => this.normalizeDocument(document)));
   }
 
   replaceContent(
@@ -167,10 +193,12 @@ export class DocumentService {
     const formData = new FormData();
     formData.append('file', file, file.name);
     formData.append('purgePreviousVersions', String(purgePreviousVersions));
-    return this.http.put<DocumentItem>(
-      `${this.documentsUrl}/${encodeURIComponent(documentId)}/content`,
-      formData,
-    );
+    return this.http
+      .put<DocumentItem>(
+        `${this.documentsUrl}/${encodeURIComponent(documentId)}/content`,
+        formData,
+      )
+      .pipe(map((document) => this.normalizeDocument(document)));
   }
 
   getEditableText(documentId: string): Observable<DocumentEditableText> {
@@ -180,10 +208,12 @@ export class DocumentService {
   }
 
   updateEditableText(documentId: string, text: string): Observable<DocumentItem> {
-    return this.http.put<DocumentItem>(
-      `${this.documentsUrl}/${encodeURIComponent(documentId)}/editable-text`,
-      { text },
-    );
+    return this.http
+      .put<DocumentItem>(
+        `${this.documentsUrl}/${encodeURIComponent(documentId)}/editable-text`,
+        { text },
+      )
+      .pipe(map((document) => this.normalizeDocument(document)));
   }
 
   listVersions(documentId: string): Observable<DocumentVersionItem[]> {
@@ -197,5 +227,22 @@ export class DocumentService {
       `${this.documentsUrl}/${encodeURIComponent(documentId)}/versions/${versionNumber}/content`,
       { responseType: 'blob' },
     );
+  }
+
+  private normalizeDocument(document: DocumentItem): DocumentItem {
+    return {
+      ...document,
+      permission: document.permission
+        ? document.permission.toUpperCase() as DocumentItem['permission']
+        : null,
+      scanStatus: document.scanStatus.toUpperCase() as DocumentItem['scanStatus'],
+    };
+  }
+
+  private normalizeScanStatus(status: DocumentScanStatusItem): DocumentScanStatusItem {
+    return {
+      ...status,
+      scanStatus: status.scanStatus.toUpperCase() as DocumentScanStatusItem['scanStatus'],
+    };
   }
 }
