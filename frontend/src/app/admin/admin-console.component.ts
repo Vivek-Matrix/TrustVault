@@ -23,7 +23,8 @@ type AdminSection = 'overview' | 'audit' | 'documents' | 'settings';
     <section class="admin-console" aria-labelledby="admin-console-heading">
       <h2 id="admin-console-heading">Administration</h2>
       <p class="admin-notice">
-        Platform oversight only. Administrator access does not grant permission to read document contents.
+        Platform oversight is separate from document access. Use the document workspace to manage
+        documents you own or access explicitly granted to you.
       </p>
       <nav class="admin-navigation" aria-label="Administration sections">
         <button type="button" (click)="selectSection('overview')">Overview</button>
@@ -125,59 +126,75 @@ type AdminSection = 'overview' | 'audit' | 'documents' | 'settings';
             <label>Category <input #documentCategory /></label>
           </div>
           <button type="button" (click)="searchDocuments(documentSearch.value, documentOwner.value, documentCategory.value)">Search documents</button>
+          <div class="admin-search-results" aria-live="polite">
+            @if (documentsSearched()) {
+              <p>{{ documentsTotal() }} document(s) match</p>
+              @if (documents().length === 0) {
+                <p class="admin-empty-results">No documents match the supplied filters.</p>
+              } @else {
+                <ul class="admin-results">
+                  @for (document of documents(); track document.id) {
+                    <li>
+                      <strong>{{ document.title }} · {{ document.category }}</strong>
+                      <span>Owner: {{ document.ownerEmail }} · {{ document.originalFileName }} · {{ document.sizeBytes }} bytes</span>
+                      <span>Uploaded {{ document.createdAtUtc | date:'medium' }} · {{ document.versionCount }} versions · {{ document.activeGrantCount }} active grants · {{ document.scanStatus }}</span>
+                      <button type="button" (click)="loadPermissions(document)">Permission history</button>
+                      @if (!document.isDeleted) {
+                        <label>Reassign to active member ID <input #newOwnerId /></label>
+                        <label>Reason <input #reassignReason maxlength="500" /></label>
+                        <button type="button" (click)="reassignOwner(document, newOwnerId.value, reassignReason.value)">Reassign owner</button>
+                      }
+                      @if (selectedDocumentId() === document.id) {
+                        <ul class="admin-permission-list">
+                          @for (permission of permissions(); track permission.userId + permission.grantedAtUtc) {
+                            <li>
+                              {{ permission.email }} · {{ permission.permission }} ·
+                              {{ permission.revokedAtUtc ? 'Revoked' : 'Active' }}
+                              @if (!permission.revokedAtUtc) {
+                                <label>Reason <input #revokeReason maxlength="500" /></label>
+                                <button type="button" (click)="revokePermission(document, permission, revokeReason.value)">Revoke grant</button>
+                              }
+                            </li>
+                          }
+                        </ul>
+                      }
+                    </li>
+                  }
+                </ul>
+              }
+              @if (documentsPage() * 50 < documentsTotal()) {
+                <button type="button" (click)="nextDocumentsPage(documentSearch.value, documentOwner.value, documentCategory.value)">Next documents page</button>
+              }
+            }
+          </div>
           <h4>Named-user shares</h4>
           <div class="admin-filter-grid">
             <label>Document title or account email <input #shareSearch /></label>
           </div>
           <button type="button" (click)="searchShares(shareSearch.value)">Search shares</button>
-          <p>{{ sharesTotal() }} active share(s)</p>
-          <ul class="admin-results">
-            @for (share of shares(); track share.documentId + share.userId) {
-              <li>
-                <strong>{{ share.documentTitle }} · {{ share.permission }}</strong>
-                <span>Owner: {{ share.ownerEmail }} · Recipient: {{ share.userEmail }}</span>
-                <time [attr.datetime]="share.grantedAtUtc">{{ share.grantedAtUtc | date:'medium' }}</time>
-                <label>Revocation reason <input #shareReason maxlength="500" /></label>
-                <button type="button" (click)="revokeShare(share, shareReason.value)">Revoke share</button>
-              </li>
+          <div class="admin-search-results" aria-live="polite">
+            @if (sharesSearched()) {
+              <p>{{ sharesTotal() }} active share(s)</p>
+              @if (shares().length === 0) {
+                <p class="admin-empty-results">No active shares match the supplied filter.</p>
+              } @else {
+                <ul class="admin-results">
+                  @for (share of shares(); track share.documentId + share.userId) {
+                    <li>
+                      <strong>{{ share.documentTitle }} · {{ share.permission }}</strong>
+                      <span>Owner: {{ share.ownerEmail }} · Recipient: {{ share.userEmail }}</span>
+                      <time [attr.datetime]="share.grantedAtUtc">{{ share.grantedAtUtc | date:'medium' }}</time>
+                      <label>Revocation reason <input #shareReason maxlength="500" /></label>
+                      <button type="button" (click)="revokeShare(share, shareReason.value)">Revoke share</button>
+                    </li>
+                  }
+                </ul>
+              }
+              @if (sharesPage() * 50 < sharesTotal()) {
+                <button type="button" (click)="nextSharesPage()">Next shares page</button>
+              }
             }
-          </ul>
-          @if (sharesPage() * 50 < sharesTotal()) {
-            <button type="button" (click)="nextSharesPage()">Next shares page</button>
-          }
-          <ul class="admin-results">
-            @for (document of documents(); track document.id) {
-              <li>
-                <strong>{{ document.title }} · {{ document.category }}</strong>
-                <span>Owner: {{ document.ownerEmail }} · {{ document.originalFileName }} · {{ document.sizeBytes }} bytes</span>
-                <span>Uploaded {{ document.createdAtUtc | date:'medium' }} · {{ document.versionCount }} versions · {{ document.activeGrantCount }} active grants · {{ document.scanStatus }}</span>
-                <button type="button" (click)="loadPermissions(document)">Permission history</button>
-                @if (!document.isDeleted) {
-                  <label>Reassign to active member ID <input #newOwnerId /></label>
-                  <label>Reason <input #reassignReason maxlength="500" /></label>
-                  <button type="button" (click)="reassignOwner(document, newOwnerId.value, reassignReason.value)">Reassign owner</button>
-                }
-                @if (selectedDocumentId() === document.id) {
-                  <ul class="admin-permission-list">
-                    @for (permission of permissions(); track permission.userId + permission.grantedAtUtc) {
-                      <li>
-                        {{ permission.email }} · {{ permission.permission }} ·
-                        {{ permission.revokedAtUtc ? 'Revoked' : 'Active' }}
-                        @if (!permission.revokedAtUtc) {
-                          <label>Reason <input #revokeReason maxlength="500" /></label>
-                          <button type="button" (click)="revokePermission(document, permission, revokeReason.value)">Revoke grant</button>
-                        }
-                      </li>
-                    }
-                  </ul>
-                }
-              </li>
-            }
-          </ul>
-          <p>{{ documentsTotal() }} document(s) match</p>
-          @if (documentsPage() * 50 < documentsTotal()) {
-            <button type="button" (click)="nextDocumentsPage(documentSearch.value, documentOwner.value, documentCategory.value)">Next documents page</button>
-          }
+          </div>
         </section>
       }
 
@@ -213,11 +230,13 @@ export class AdminConsoleComponent {
   readonly alerts = signal<AdminSecurityAlert[]>([]);
   readonly auditPage = signal<AdminAuditPage | null>(null);
   readonly documents = signal<AdminDocument[]>([]);
+  readonly documentsSearched = signal(false);
   readonly documentsPage = signal(0);
   readonly documentsTotal = signal(0);
   readonly selectedDocumentId = signal<string | null>(null);
   readonly permissions = signal<AdminPermission[]>([]);
   readonly shares = signal<AdminShare[]>([]);
+  readonly sharesSearched = signal(false);
   readonly sharesPage = signal(0);
   readonly sharesTotal = signal(0);
   readonly settings = signal<AdminSystemSettings | null>(null);
@@ -325,6 +344,7 @@ export class AdminConsoleComponent {
   searchDocuments(search: string, owner: string, category: string, page = 1): void {
     this.service.documents(search, owner, category, page).subscribe({
       next: (response: AdminDocumentPage) => {
+        this.documentsSearched.set(true);
         this.documents.set(response.items);
         this.documentsPage.set(response.page);
         this.documentsTotal.set(response.totalCount);
@@ -351,6 +371,7 @@ export class AdminConsoleComponent {
     this.currentShareSearch = search;
     this.service.shares(search, 1).subscribe({
       next: (response: AdminSharePage) => {
+        this.sharesSearched.set(true);
         this.shares.set(response.items);
         this.sharesPage.set(response.page);
         this.sharesTotal.set(response.totalCount);

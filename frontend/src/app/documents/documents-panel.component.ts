@@ -20,7 +20,7 @@ const maximumFileBytes = 10 * 1024 * 1024;
     <section class="documents-card" aria-labelledby="documents-heading">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">YOUR PRIVATE FILES</p>
+          <p class="eyebrow">DOCUMENT WORKSPACE</p>
           <h2 id="documents-heading">Documents</h2>
         </div>
         <button
@@ -200,9 +200,7 @@ const maximumFileBytes = 10 * 1024 * 1024;
                   <ol class="audit-list">
                     @for (audit of audits(); track audit.id) {
                       <li class="audit-item">
-                        <strong>
-                          {{ audit.activity === 'CREATED' ? 'Created' : audit.activity === 'EDITED' ? 'Edited' : audit.activity === 'SCANNED' ? 'Scanned' : 'Read' }}
-                        </strong>
+                        <strong>{{ formatAuditActivity(audit.activity) }}</strong>
                         <span>{{ audit.actorEmail ?? 'Unknown user' }}</span>
                         <span
                           class="audit-result"
@@ -514,6 +512,10 @@ export class DocumentsPanelComponent {
 
   formatScanStatus(status: DocumentItem['scanStatus']): string {
     return status.replaceAll('_', ' ').toLowerCase();
+  }
+
+  formatAuditActivity(activity: DocumentAuditItem['activity']): string {
+    return activity.charAt(0) + activity.slice(1).toLowerCase();
   }
 
   retryScan(item: DocumentItem): void {

@@ -333,6 +333,82 @@ public sealed class ApiAuthorizationTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Administrator_can_use_owned_and_granted_document_access()
+    {
+        var administrator = await GetAdministratorSessionAsync();
+        using var ownedUpload = await UploadPdfAsync(administrator);
+        Assert.Equal(System.Net.HttpStatusCode.Created, ownedUpload.StatusCode);
+        var ownedDocument = await ownedUpload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(ownedDocument);
+        Assert.True(ownedDocument.IsOwner);
+
+        using var ownedUpdateRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{ownedDocument.Id}",
+            administrator,
+            JsonContent.Create(new
+            {
+                title = "Administrator report",
+                description = "Updated by the administrator owner",
+                category = "Operations"
+            }));
+        using var ownedUpdate = await _client.SendAsync(ownedUpdateRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, ownedUpdate.StatusCode);
+
+        var owner = await CreateMemberAndSetPasswordAsync(NewEmail());
+        using var sharedUpload = await UploadPdfAsync(owner);
+        Assert.Equal(System.Net.HttpStatusCode.Created, sharedUpload.StatusCode);
+        var sharedDocument = await sharedUpload.Content.ReadFromJsonAsync<DocumentResponse>();
+        Assert.NotNull(sharedDocument);
+
+        using var grantRequest = CreateAuthorizedRequest(
+            HttpMethod.Post,
+            $"/api/documents/{sharedDocument.Id}/grants",
+            owner,
+            JsonContent.Create(new { email = administrator.Email, permission = "EDIT" }));
+        using var grantResponse = await _client.SendAsync(grantRequest);
+        Assert.Equal(System.Net.HttpStatusCode.Created, grantResponse.StatusCode);
+
+        using var sharedUpdateRequest = CreateAuthorizedRequest(
+            HttpMethod.Put,
+            $"/api/documents/{sharedDocument.Id}",
+            administrator,
+            JsonContent.Create(new
+            {
+                title = "Edited through grant",
+                description = (string?)null,
+                category = "Shared"
+            }));
+        using var sharedUpdate = await _client.SendAsync(sharedUpdateRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, sharedUpdate.StatusCode);
+
+        using var listRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            "/api/documents",
+            administrator);
+        using var listResponse = await _client.SendAsync(listRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, listResponse.StatusCode);
+        var documents = await listResponse.Content.ReadFromJsonAsync<DocumentResponse[]>();
+        Assert.NotNull(documents);
+        Assert.Contains(documents, item => item.Id == ownedDocument.Id && item.IsOwner);
+        Assert.Contains(
+            documents,
+            item => item.Id == sharedDocument.Id
+                && !item.IsOwner
+                && item.Permission == "EDIT");
+
+        using var auditRequest = CreateAuthorizedRequest(
+            HttpMethod.Get,
+            $"/api/documents/{sharedDocument.Id}/audits",
+            administrator);
+        using var auditResponse = await _client.SendAsync(auditRequest);
+        Assert.Equal(System.Net.HttpStatusCode.OK, auditResponse.StatusCode);
+        var audits = await auditResponse.Content.ReadFromJsonAsync<DocumentAuditResponse[]>();
+        Assert.NotNull(audits);
+        Assert.Contains(audits, item => item.Activity == "EDITED");
+    }
+
+    [Fact]
     public async Task Bootstrap_creates_exactly_one_primary_administrator()
     {
         using var scope = _factory.Services.CreateScope();

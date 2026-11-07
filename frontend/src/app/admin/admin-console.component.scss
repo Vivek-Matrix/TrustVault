@@ -104,6 +104,17 @@
   list-style: none;
 }
 
+.admin-search-results {
+  margin: 0.8rem 0 1.5rem;
+}
+
+.admin-empty-results {
+  padding: 0.8rem;
+  border: 1px dashed #cbd4df;
+  border-radius: 0.55rem;
+  color: #526178;
+}
+
 .admin-results > li,
 .admin-permission-list > li {
   display: grid;

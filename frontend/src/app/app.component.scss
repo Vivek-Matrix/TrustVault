@@ -38,7 +38,24 @@ footer {
 }
 
 .signed-in-card {
-  max-width: 48rem;
+  max-width: 90rem;
+}
+
+.admin-workspace {
+  display: grid;
+  grid-template-columns: minmax(20rem, 0.8fr) minmax(0, 1.5fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.admin-document-panel {
+  position: sticky;
+  top: 1rem;
+  min-width: 0;
+}
+
+.admin-main-panel {
+  min-width: 0;
 }
 
 h2 {
@@ -131,4 +148,14 @@ footer {
   margin: 2rem auto;
   font-size: 0.8rem;
   text-align: center;
+}
+
+@media (max-width: 68rem) {
+  .admin-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-document-panel {
+    position: static;
+  }
 }

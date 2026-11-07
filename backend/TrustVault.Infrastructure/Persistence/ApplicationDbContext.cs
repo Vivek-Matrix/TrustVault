@@ -142,6 +142,7 @@ public sealed class ApplicationDbContext(
             entity.HasIndex(auditEvent => new { auditEvent.DocumentId, auditEvent.TimestampUtc });
             entity.HasIndex(auditEvent => auditEvent.TimestampUtc);
         });
+
     }
 
     private void EnsureAuditEventsAreAppendOnly()

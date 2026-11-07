@@ -53,7 +53,7 @@ export interface DocumentScanStatusItem {
 export interface DocumentAuditItem {
   id: string;
   actorEmail: string | null;
-  activity: 'CREATED' | 'READ' | 'EDITED' | 'SCANNED';
+  activity: 'CREATED' | 'READ' | 'EDITED' | 'SHARED' | 'REMOVED' | 'SCANNED';
   result: 'SUCCESS' | 'DENIED';
   timestampUtc: string;
 }

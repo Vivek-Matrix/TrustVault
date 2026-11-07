@@ -68,8 +68,15 @@ import { AdminConsoleComponent } from './admin/admin-console.component';
               </form>
             </section>
           } @else if (session.roles.includes('Administrator')) {
-            <app-admin-console />
-            <app-admin-members />
+            <div class="admin-workspace">
+              <aside class="admin-document-panel" aria-label="Administrator document workspace">
+                <app-documents-panel />
+              </aside>
+              <section class="admin-main-panel">
+                <app-admin-console />
+                <app-admin-members />
+              </section>
+            </div>
           } @else {
             <app-documents-panel />
           }
