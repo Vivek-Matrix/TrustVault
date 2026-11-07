@@ -1,295 +1,221 @@
 # TrustVault
 
-TrustVault is a local document-sharing prototype. It supports authentication,
-private PDF/TXT/DOC/DOCX upload/download, named-user READ/EDIT sharing, document
-editing, version history, and audit-chain verification. It is not
-production-ready. Refresh-token issuance, rotation, and revocation are
-implemented; production deployment is not.
+> A security-focused, administrator-managed document-sharing platform: private
+> PDF/TXT/DOC/DOCX storage, malware scanning, named-user READ/EDIT sharing,
+> version history, and a hash-chained audit trail.
 
-## Architecture
+**Status:** prototype, not production-ready. Use dummy files only. Claims in
+this documentation cite their source file; anything not verifiable from the
+code is marked **Needs confirmation**.
 
-- `frontend/`: Angular 21 and TypeScript.
-- `backend/TrustVault.Api`: ASP.NET Core 10 API, admin-managed accounts/login,
-  short-lived JWT validation, deny-by-default authorization policy, and
-  owner and active-grant document authorization.
-- `backend/TrustVault.Application`: application use cases and private document
-  storage contract.
-- `backend/TrustVault.Domain`: document, grant, version, audit, and role types.
-- `backend/TrustVault.Infrastructure`: ASP.NET Core Identity and PostgreSQL EF Core
-  persistence.
-- `backend/TrustVault.Migrator`: one-shot EF Core database migration runner for
-  controlled deployment release commands.
-- `backend/TrustVault.Tests`: API authentication and document authorization
-  integration tests.
-- PostgreSQL 16 is provided locally by Docker Compose.
+## Table of contents
 
-## Hosting direction
+1. [Project purpose and intended users](#1-project-purpose-and-intended-users)
+2. [Repository structure](#2-repository-structure)
+3. [Quick start](#3-quick-start)
+4. [Configuration](#4-configuration)
+5. [Main features and workflows](#5-main-features-and-workflows)
+6. [API overview](#6-api-overview)
+7. [Testing and linting](#7-testing-and-linting)
+8. [Deployment (Railway)](#8-deployment-railway)
+9. [Architecture at a glance](#9-architecture-at-a-glance)
+10. [Contributing](#10-contributing)
+11. [Known limitations and gaps](#11-known-limitations-and-gaps)
+12. [Documentation map](#12-documentation-map)
 
-AWS is the selected cloud provider for a future internet deployment. The AWS
-experience guidance is present in `.github/copilot-instructions.md`. AWS CLI
-v2, `uv`, and the Agent Toolkit are installed; the `default` profile is
-authenticated for `ap-southeast-2`. The existing workspace AWS MCP entry uses
-a remote HTTP endpoint and was preserved. TrustVault is not deployed to AWS
-and no AWS application or database resources have been created. The AWS
-project is on the Free plan with $100 in credits; credits are not a monthly
-spend limit. The owner requested a full cost estimate before selecting a
-recurring budget or approving resources. The preferred document design is
-private S3 quarantine with asynchronous scanning, but it is not implemented.
-The current Docker image is built by CI; it is not published to AWS.
+---
 
-The earlier Render deployment instructions are superseded. See the
-[AWS deployment status and prerequisites](docs/deployment.md) before taking
-deployment steps. Do not upload real confidential files: although server-side
-sharing and revocation are implemented locally, production-grade storage and
-audit integrity controls are not.
+## 1. Project purpose and intended users
 
-## Administrator oversight
+TrustVault lets an organisation share confidential documents with **named
+accounts only**, with every access decision enforced server-side and recorded
+in a tamper-evident audit chain.
 
-The Administrator can view platform counts, investigate and export filtered
-audit metadata, verify the stored audit chain, review rule-based security
-alerts, search document metadata and permission history, revoke a named-user
-grant with a reason, reassign a document to an active member, reset member
-credentials, and inspect read-only policy settings. These controls do not
-provide document content access; the Administrator still needs a document
-grant to read or download content. Ownership reassignment revokes all current
-grants. Named-user shares do not support guest links or expiry.
+| Role | What they can do | Evidence |
+|---|---|---|
+| **Administrator** (exactly one, bootstrapped from config) | Create/remove member accounts, reset credentials, view platform counts, search/export audit metadata, verify the audit chain, review alerts, revoke grants, reassign ownership. **Cannot read document content without a grant.** | `UserRoles.cs`, `AdminBootstrapper` (`AdministratorBootstrapper.cs`), `AdminMembersController.cs`, `AdminOversightController.cs` |
+| **Member** (`Viewer` base role) | Upload documents (becoming owner), share with named users as READ or EDIT, revoke, edit, view history. | `UserRoles.Viewer`, `DocumentsController.cs` |
+| **Grantee** | Access a shared document according to an active READ or EDIT grant. | `DocumentPermission.cs` (`Read`, `Edit`) |
 
-Alert rules currently flag five audited denials from one actor/IP in ten
-minutes or twenty successful downloads from one actor/IP in an hour. They do
-not send notifications and do not capture anonymous authorization failures.
-Settings are view-only; infrastructure, scanner, password, session, and upload
-policy changes require reviewed deployment configuration. MFA,
-self-service password recovery, retention/recovery, deletion approval,
-quarantine, and independent audit anchoring remain unfinished.
+There is **no public registration**; the Administrator creates every account
+(`AuthController.cs` exposes only login/refresh/logout/change-password).
 
-See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md),
-[docs/backlog.md](docs/backlog.md), and [THREATS.md](THREATS.md).
+## 2. Repository structure
 
-## Requirements
+```text
+TrustVault/
+├── backend/
+│   ├── TrustVault.Api/            ASP.NET Core 10 API: controllers, JWT auth, rate limiting, static SPA hosting
+│   ├── TrustVault.Application/    Contracts: IPrivateDocumentStorage, IPrivateDocumentScanner
+│   ├── TrustVault.Domain/         Document, DocumentGrant, DocumentVersion, AuditEvent, hash + chain verifier
+│   ├── TrustVault.Infrastructure/ EF Core + Identity + PostgreSQL, ClamAV client, filesystem storage, migrations
+│   ├── TrustVault.Migrator/       One-shot migration runner; also `--verify-audit`
+│   ├── TrustVault.Converter/      Isolated LibreOffice service for DOC/DOCX <-> text
+│   └── TrustVault.Tests/          xUnit integration/unit tests
+├── frontend/                      Angular 21 SPA (pdf-lib for the in-browser PDF editor)
+├── database/setup-roles.sql       Restricted migrator/runtime PostgreSQL roles (local credentials only)
+├── docs/                          Architecture, setup, testing, AI-development notes (+ legacy api/backlog/deployment)
+├── .github/workflows/ci.yml       Backend, frontend, container CI jobs
+├── docker-compose.yml             Local PostgreSQL, ClamAV, converter, converter dev proxy
+├── Dockerfile                     Multi-stage image: Angular build + API + migrator
+├── THREATS.md, PROMPTS.md         Threat notes; AI prompt log
+└── TrustVault.sln
+```
 
-- .NET 10 SDK
-- Node.js 20.19+ or 22.12+ and npm
-- Docker Desktop with Docker Compose
+Dependency direction (from the `.csproj` `ProjectReference` entries):
+`Api → Application, Infrastructure`; `Infrastructure → Application, Domain`;
+`Application → Domain`; `Migrator → Infrastructure`.
 
-## Run locally
+## 3. Quick start
 
-From the repository root in PowerShell:
+Prerequisites: .NET 10 SDK, Node.js 20.19+ or 22.12+, Docker Desktop with
+Compose. Full, step-by-step instructions are in **[docs/SETUP.md](docs/SETUP.md)**.
 
 ```powershell
 docker compose up -d --build --force-recreate postgres clamav converter converter-dev-proxy
-docker compose exec -T postgres psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-setup-roles.sql
-# The role setup script uses local-only passwords; never reuse them outside Compose.
-$env:ConnectionStrings__TrustVault = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_runtime;Password=runtime_local"
-$keyBytes = New-Object byte[] 32
-$rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
-$rng.GetBytes($keyBytes)
-$rng.Dispose()
-$env:Jwt__SigningKey = [Convert]::ToBase64String($keyBytes)
-$env:Jwt__Issuer = "TrustVault"
-$env:Jwt__Audience = "TrustVault"
-$env:AdminBootstrap__Email = "admin@gmail.com"
-$secureAdminPassword = Read-Host "Set the bootstrap administrator password" -AsSecureString
-$env:AdminBootstrap__Password = [System.Net.NetworkCredential]::new("", $secureAdminPassword).Password
-$env:Frontend__Origin = "http://localhost:4200"
-$env:DocumentConversion__Endpoint = "http://localhost:6100/"
-$env:ConnectionStrings__TrustVaultMigrator = "Host=127.0.0.1;Port=55432;Database=trustvault;Username=trustvault_migrator;Password=migrator_local"
-# Optional: documents are stored outside wwwroot at this path by default.
-# $env:Storage__RootPath = "C:\TrustVaultData\documents"
-dotnet tool restore
-dotnet run --project backend\TrustVault.Migrator
-docker compose exec -T postgres psql -U trustvault_app -d trustvault -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/10-setup-roles.sql
-Remove-Item Env:ConnectionStrings__TrustVaultMigrator
-dotnet run --project backend\TrustVault.Api
+# ...apply role script, set env vars, run migrator, then:
+dotnet run --project backend\TrustVault.Api      # http://localhost:5106
+cd frontend; npm ci; npm start                   # http://localhost:4200
 ```
 
-In another PowerShell window:
+Sign in as the bootstrap administrator (`AdminBootstrap__Email` /
+`AdminBootstrap__Password`), then create members under **Manage members**.
 
-```powershell
-Set-Location frontend
-npm ci
-npm start
-```
+## 4. Configuration
 
-The API listens at `http://localhost:5106` and the Angular app at
-`http://localhost:4200`. Health, login, and refresh are anonymous; public
-registration is disabled. On the first API startup after migration, the API
-creates the sole Administrator from `AdminBootstrap__Email` and
-`AdminBootstrap__Password`.
-Store the password in a local secret manager or environment, not in source
-control. Once the administrator exists, the bootstrap settings can be removed.
-The administrator can create member accounts by email; every new account
-automatically receives the Viewer base role, with no role selector. Document
-ownership is assigned to the uploader for each document, and owners grant
-document-specific access. Each new member receives a one-time temporary
-password that must be changed at first sign-in. Removing a member disables
-their account and revokes their tokens and active grants immediately, while
-retaining their documents and audit records. Adding a previously removed email
-reactivates the same identity with a new temporary password; its documents are
-retained, while old access grants remain revoked.
-Authentication returns a 15-minute bearer token by default,
-configurable to 5-30 minutes with `Jwt:AccessTokenLifetimeMinutes`. The Angular
-client keeps the token in memory only, so closing or reloading the page signs
-the user out. The development API documentation is at `/swagger`.
+Key settings (full table with defaults and sources in
+[docs/SETUP.md](docs/SETUP.md#5-configuration-reference)):
 
-After signing in, the Angular screen lets you upload, list, refresh, and download
-PDF, TXT, DOC, and DOCX files. TXT documents can be edited directly. Word
-documents use the isolated LibreOffice converter service; Word editing keeps
-text but does not preserve formatting, images, tables, or other embedded
-content. Saving a legacy `.doc` produces `.docx`; the original is kept in
-previous versions. The in-app page editor and PDF replacement are available
-for PDFs. Owners can grant READ or EDIT access to another
-existing account and revoke an active grant. READ permits viewing and download;
-EDIT also permits changing title/details, editing TXT/Word text, editing PDF
-pages, and replacing a PDF.
-Uploads are limited to 10 MiB. The server validates the extension and
-format-specific signature or structure, then stores files under an opaque
-generated key outside the static web root and scans them with the local ClamAV
-service. Download and edit are enabled only when the scan status is `CLEAN`;
-failed scans can be retried by the owner. TXT files must use UTF-8 or Unicode
-with a byte-order mark. The current filesystem provider and local scanner
-configuration are for development only; they are not a production storage or
-scanning design. Use dummy files, not confidential documents. Wait for a
-`CLEAN` status before downloading or editing.
+| Key | Required | Purpose |
+|---|---|---|
+| `ConnectionStrings:TrustVault` | Yes | API runtime DB connection (restricted role) |
+| `ConnectionStrings:TrustVaultMigrator` | For migrations | Migrator DB connection |
+| `Jwt:SigningKey` | Yes | Must be ≥ 32 UTF-8 bytes (`Program.cs`) |
+| `AdminBootstrap:Email` / `:Password` | First start | Creates the sole Administrator |
+| `MalwareScanning:ClamAv:Host` / `:Port` | Yes in non-Development | Must be a private, non-loopback host (`Program.cs`) |
+| `DocumentConversion:Endpoint` | For Word editing | LibreOffice converter URL |
+| `Frontend:Origin` | Recommended | CORS origin |
 
-For local development, the API reaches the converter through a resource-limited
-Nginx relay bound to `127.0.0.1:6100`. The converter itself has no published
-host port and remains on an internal Docker network; the relay is not intended
-for production.
+In .NET, `:` is written `__` in environment variables
+(e.g. `Jwt__SigningKey`).
 
-### Try the document screen
+## 5. Main features and workflows
 
-1. Keep the API running in the first PowerShell window.
-2. In a second PowerShell window, run `Set-Location frontend` and then
-   `npm start`.
-3. Open `http://localhost:4200` and sign in as the bootstrap administrator.
-4. In **Manage members**, add a member by email. The account receives the
-   Viewer base role automatically. Deliver the displayed temporary password
-   securely out-of-band. Sign out, then sign in as that member and change the
-   temporary password.
-5. In **Documents**, enter a title/category, choose a small dummy PDF, TXT,
-   DOC, or DOCX file, and select **Upload file**. Wait for the scan status to
-   show `clean`; if it shows `scan failed`, confirm the local ClamAV service is
-   ready and select **Retry scan**. Only clean files can be downloaded or
-   edited. Choose **Edit** to edit TXT or Word
-   text, or to open the page editor for a PDF. The converter service must be
-   running to edit Word files.
-5. Sign out, create a second test account, and confirm its document list is
-   empty. Automated API tests separately verify that a different account
-   cannot retrieve another owner's document, even with its ID.
-6. Sign back in as the owner. On the document, choose **Manage access**, enter
-   the second account's email, leave permission as **Read**, then choose
-   **Grant access**.
-7. Sign out and sign in as the second account. Choose **Refresh list**; the
-   shared document should appear with its permission, and **Download** should
-   work.
-8. Sign back in as the owner, choose **Manage access**, then **Revoke** beside
-   the second account and confirm. Sign back in as that account and refresh:
-   the document should no longer be listed. The API integration tests also
-   verify that revoked access to its old document ID returns 404.
-9. Repeat the sharing steps, this time choosing **Edit**. Sign in as the second
-   account and choose **Edit** on the shared document. Try saving a new title,
-   edit and save a TXT or Word text file, then use a disposable PDF to add text,
-   draw, replace an area, reorder/remove a page, and select **Save edited PDF**.
-   Replace the PDF with a different dummy PDF and verify the previous file is
-   available under **Previous versions**.
-10. Use a disposable PDF with non-sensitive sample text to test **Redact area**.
-    Save the result, download it, and verify the covered area is black and the
-    old file no longer appears in **Previous versions**. Do not treat this as
-    secure deletion from backups or already-downloaded copies.
-11. Choose the clock icon on a document to view its creation, read, and edit
-    history, including who performed the action and when. Owners and users with
-    an active grant can view the history; revoked users cannot.
-12. As the owner, choose the trash icon to remove a document. Confirm the
-    warning to delete it and revoke every user's shared access. The document
-    and its previous versions become unavailable to everyone.
+1. **Admin-managed accounts.** Administrator creates a member; the account gets
+   a one-time temporary password that must be changed at first sign-in
+   (`MustChangePassword` check in `Program.cs` JWT events).
+2. **Secure upload.** PDF, TXT, DOC, DOCX up to **10 MiB**; extension and
+   signature/structure validated; stored under an opaque key outside the web
+   root (`DocumentsController.cs`, `FileSystemPrivateDocumentStorage.cs`).
+3. **Malware scan.** Files are streamed to ClamAV (`zINSTREAM`). Status moves
+   through `PendingScan → Scanning → Clean | Rejected | ScanFailed`
+   (`DocumentScanStatus.cs`). Download/edit require `Clean`.
+4. **Named-user sharing.** Owner grants READ or EDIT to an existing account and
+   can revoke; grants are checked on every request; unauthorised users get 404.
+5. **Editing and versions.** TXT and Word text editing, in-browser PDF page
+   editor and replacement, redaction, version history. Word edits keep text
+   only; legacy `.doc` is saved as `.docx`.
+6. **Audit trail.** Upload, read, grant, revoke and denied events are written
+   as a SHA-256 hash chain; `--verify-audit` and `/api/admin/audit/verify`
+   check it (`AuditEventHash.cs`, `AuditChainVerifier.cs`).
+7. **Administrator oversight.** Dashboard, audit search/CSV export (≤ 5,000
+   rows), rule-based alerts, metadata-only document search, ownership
+   reassignment (`docs/api.md`).
 
-Do not use real confidential files. The browser keeps the access token only in
-memory; refreshing or closing the page signs the user out. Use separate
-browser profiles or sign out between accounts during this test.
+## 6. API overview
 
-## Database
+Authentication is a JWT bearer token (default lifetime 15 minutes, 5–30
+allowed). A global fallback policy requires authentication unless a route is
+`[AllowAnonymous]`.
 
-The initial EF Core migration is in
-`backend/TrustVault.Infrastructure/Persistence/Migrations`. The local run steps
-apply it to the Compose database before starting the API. The migrator has been
-verified against both the existing local Compose database and a separate empty
-PostgreSQL database. The existing named volume was preserved.
+| Area | Routes (all under `/api`) |
+|---|---|
+| System | `GET system/health` (anon), `GET system/ready` (anon; checks DB **and** ClamAV), `GET system/whoami` |
+| Auth | `POST auth/login`, `auth/refresh`, `auth/logout`, `auth/change-password` |
+| Documents | `POST/GET documents`, `GET/PUT/DELETE documents/{id}`, `GET documents/{id}/content`, `…/audits`, `…/grants` (GET/POST), `…/grants/{userId}` (DELETE), `…/editable-text` (GET/PUT), `…/content` (PUT), `…/versions`, `…/versions/{n}/content`, `…/scan/retry`, `…/versions/{n}/scan/retry` |
+| Admin members | `GET/POST admin/members`, `DELETE admin/members/{userId}` |
+| Admin oversight | `admin/dashboard`, `audit`, `audit/export`, `audit/verify`, `security-alerts`, `documents`, `shares`, `documents/{id}/permissions`, `documents/{id}/reassign-owner`, `members/{userId}/reset-credentials`, `settings` |
 
-The design-time context uses the configured connection string or the local
-Compose default. Compose publishes PostgreSQL on host port `55432` to avoid
-collisions with another local PostgreSQL instance; container port remains `5432`.
-The Compose credentials are for local development only. If the database
-container existed before the host-port change, the command above recreates the
-container while preserving its named volume. Do not use `docker compose down -v`;
-that would delete the local database volume.
+Source: `[Http*]` attributes in `backend/TrustVault.Api/Controllers/`. Semantics
+and access rules: [docs/api.md](docs/api.md). Swagger UI is served at
+`/swagger` **in Development only** (`Program.cs`).
 
-If the migrator reports PostgreSQL error `28P01`, first confirm that Compose is
-running from this repository folder. Then reset the local-only role password and
-test the published TCP port:
-
-```powershell
-docker compose exec -T postgres psql -U trustvault_app -d trustvault -c "ALTER ROLE trustvault_app WITH PASSWORD 'local_only';"
-docker run --rm --add-host=host.docker.internal:host-gateway -e PGPASSWORD=local_only postgres:16-alpine psql -h host.docker.internal -p 55432 -U trustvault_app -d trustvault -c "select current_user, current_database();"
-```
-
-Only continue when the TCP test succeeds. Then rerun
-`dotnet run --project backend\TrustVault.Migrator`. These commands apply only to
-the local Compose database and its non-production credentials.
-
-## Verify
+## 7. Testing and linting
 
 ```powershell
 dotnet test TrustVault.sln
-Set-Location frontend
-npm ci
-npm run lint
-npm test -- --watch=false --browsers=ChromeHeadless
-npm run build
-npm audit --omit=dev
+cd frontend; npm ci; npm run lint; npm test -- --watch=false --browsers=ChromeHeadless; npm run build; npm audit --omit=dev
 ```
 
-CI runs the backend format/build/test/migration checks, a production Docker image
-build, and frontend lint/test/build/dependency audit. AWS resources and a public
-URL are not configured. No seeded demo users or demo video are included.
+Details, CI jobs and database prerequisites: **[docs/TESTING.md](docs/TESTING.md)**.
 
-## Security status
+## 8. Deployment (Railway)
 
-The API validates JWT signatures, issuer, audience, and expiration, and applies
-an authenticated-user fallback policy. Public registration is disabled. The
-sole bootstrap administrator creates Viewer-default members with mandatory
-temporary-password changes; client-supplied role values are ignored. Document
-ownership is assigned per document to its uploader. Passwords use Identity's configured
-requirements and hashing. Failed sign-ins trigger Identity lockout, and
-authentication routes have an in-memory per-IP rate limit. Every authenticated
-request checks current account suspension and security-stamp state in the
-database to invalidate tokens immediately on member removal. Document metadata and downloads are available to
-the owner or a user with an active named grant; the server checks grant state
-on each request, so revocation takes effect immediately. Unauthorized users
-receive 404. Upload, list, metadata, download, grant, revoke, and denied access
-events are recorded using a serialized hash chain. The migrator can verify the
-hashes and links among stored events with
-`dotnet run --project backend\TrustVault.Migrator -- --verify-audit`. This
-detects changed records and broken links, but cannot detect tail deletion or a
-complete rewrite without external anchoring. The chain is not tamper-proof.
-EDIT users can update details and use the in-app PDF editor to add text/draw,
-replace text areas, redact, reorder/remove pages, or replace the PDF. Page edits
-are flattened to images, so text search, links, forms, signatures, and
-accessibility features are lost. Redaction clears app-accessible previous
-versions but cannot erase external backups or copies already downloaded.
-Production malware-scanning and durable-storage choices, email verification,
-password recovery, independent audit anchoring, and production DB role
-provisioning remain follow-up work. Locally, uploads
-are synchronously scanned by ClamAV; pending, rejected, and failed files are
-blocked from download and editing. Existing documents are migrated to a
-pending scan state and must be rescanned before use. Local and CI use separate migrator
-and restricted runtime database roles; production credentials still need
-separate provisioning. Refresh tokens are issued, rotated, and revoked
-server-side, while the browser keeps the access token in memory only. An endpoint
-is not secure merely because its UI is hidden.
+The project is deployed on **Railway** (project `daring-strength`, production)
+with four services: `TrustVault`, `converter`, `Postgres`, `clamav`.
+**Needs confirmation:** these details come from the owner's Railway
+inspection, not from repository files; the repo contains no Railway config.
+See [docs/SETUP.md § Deployment](docs/SETUP.md#8-deployment-on-railway).
 
-## First commit plan
+> `docs/deployment.md` still describes AWS (and earlier Render) as targets. It
+> is outdated relative to the Railway deployment.
 
-`feat(sprint-0): establish TrustVault project foundation` — solution/workspace,
-initial data model and migration, auth boundary smoke tests, local development
-setup, CI, and architecture/security notes. Keep later user stories in separate
-feature branches and commits.
+## 9. Architecture at a glance
+
+```mermaid
+flowchart LR
+    B[Browser: Angular SPA] -->|HTTPS + JWT| API[TrustVault.Api]
+    API --> PG[(PostgreSQL)]
+    API --> FS[(Private file storage)]
+    API -->|INSTREAM scan, PING| CL[ClamAV :3310]
+    API -->|DOC/DOCX <-> text| CV[Converter: LibreOffice]
+    MG[Migrator] --> PG
+```
+
+Deep dive and sequence diagrams: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+## 10. Contributing
+
+Conventions below are **inferred** from `PROMPTS.md`, `docs/backlog.md` and
+`ci.yml`; no `CONTRIBUTING.md` exists (**Needs confirmation**).
+
+1. Branch per feature/sprint (current work lives on `feature/TV-001-project-foundation`).
+2. Conventional-style commit messages, e.g. `feat(sprint-0): establish TrustVault foundation`.
+3. Before committing, run the checks in [docs/TESTING.md](docs/TESTING.md),
+   including `dotnet format TrustVault.sln --verify-no-changes`.
+4. Push and confirm all CI jobs pass (backend, frontend, container).
+5. If you change the EF model, add a migration; CI fails on pending model changes.
+6. Never commit secrets (`.env*` is git-ignored); never reuse the local Compose
+   database passwords outside local development.
+7. Do not describe controls as stronger than they are (see `THREATS.md`).
+
+How AI assistance was used on this project, and why those practices work:
+**[docs/AI-DEVELOPMENT.md](docs/AI-DEVELOPMENT.md)**.
+
+## 11. Known limitations and gaps
+
+| # | Item | Severity | Notes / evidence |
+|---|---|---|---|
+| 1 | **ClamAV memory on Railway (minor, infrastructure-only).** The `clamav` service cannot start `clamd` on the current plan, so `/api/system/ready` returns 503 and the deploy is reported unhealthy; scan-gated features wait for a `CLEAN` status. | Minor, no code defect | `SystemController.Ready` → `ClamAvPrivateDocumentScanner.CheckReadinessAsync` (PING/PONG). Likely cause: RAM (≈2 GB needed; Compose sets `mem_limit: 2g`) and a 500 MB volume. **Needs confirmation:** logs did not show the actual `clamd` error. |
+| 2 | Storage is a local filesystem provider (dev design) | Known | `FileSystemPrivateDocumentStorage.cs`; durability on Railway **Needs confirmation** |
+| 3 | Audit chain is tamper-*evident*, not tamper-proof; no external anchoring | Known | `THREATS.md` |
+| 4 | No MFA, email verification, self-service password recovery | Backlog | `docs/backlog.md` |
+| 5 | Alerts are in-app only; no notifications | Known | `AdminOversightController.cs` |
+| 6 | Word edit loses formatting; PDF page edits are flattened to images | Known | `LibreOfficeConverter.cs`, `docs/backlog.md` |
+| 7 | Rate limiter is in-memory, per instance | Known | `Program.cs` |
+| 8 | Two small PDFs are tracked under `backend/TrustVault.Api/App_Data/documents/` | Cleanup candidate | Zip listing; **Needs confirmation** whether intended |
+
+**Simple fix for #1:** upgrade the Railway plan (a paid billing method is
+required) and raise the `clamav` memory limit to about 2 GB, enlarge
+`clamav-volume` beyond 500 MB, redeploy `clamav`, then redeploy `TrustVault`.
+No application code change is needed.
+
+## 12. Documentation map
+
+| File | Contents |
+|---|---|
+| [docs/SETUP.md](docs/SETUP.md) | Prerequisites, local run, configuration reference, Railway deployment |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, trust boundaries, data model, flows, Mermaid diagrams |
+| [docs/TESTING.md](docs/TESTING.md) | Test inventory, commands, CI, troubleshooting |
+| [docs/AI-DEVELOPMENT.md](docs/AI-DEVELOPMENT.md) | AI-assisted development process with rationale |
+| [docs/api.md](docs/api.md), [docs/backlog.md](docs/backlog.md), [THREATS.md](THREATS.md), [PROMPTS.md](PROMPTS.md) | Existing project records (unchanged) |
